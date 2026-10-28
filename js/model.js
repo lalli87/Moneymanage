@@ -106,7 +106,7 @@ export function materialize(s, today = todayStr()) {
   let n = 0;
   const ids = new Set(s.transactions.map(t => t.id));
   for (const r of live(s, 'recurring')) {
-    if (r.paused) continue;
+    if (r.paused || r.mode === 'remind') continue;   // reminder-only items are added by you, not automatically
     const from = r.materializedThrough ? addDays(r.materializedThrough, 1) : r.startDate;
     if (from > today) continue;
     for (const d of occurrences(r, from, today)) {
@@ -130,7 +130,7 @@ export function projected(s, from, to, today = todayStr()) {
     if (r.paused) continue;
     for (const d of occurrences(r, start, to)) {
       const id = occId(r, d);
-      if (!ids.has(id)) out.push({ ...r.template, id, date: d, recurringId: r.id, projected: true });
+      if (!ids.has(id)) out.push({ ...r.template, id, date: d, recurringId: r.id, projected: true, remind: r.mode === 'remind' });
     }
   }
   for (const t of live(s, 'transactions')) if (t.date >= start && t.date <= to) out.push({ ...t, projected: true });
@@ -150,12 +150,15 @@ export function periodicRate(pct, compounding, n) {
   const k = compounding === 'monthly' ? 12 : 2;
   return Math.pow(1 + pct / 100 / k, k / n) - 1;
 }
-export function rateOn(m, date) {
-  let r = +m.rate;
-  [...(m.rateChanges || [])].sort((a, b) => a.date.localeCompare(b.date))
-    .forEach(c => { if (c.date <= date) r = +c.rate; });
-  return r;
+// Terms in effect on a date. rateChanges entries can change rate and/or payment frequency (e.g. monthly → bi-weekly).
+export function termsOn(m, date) {
+  let rate = +m.rate, frequency = m.frequency;
+  [...(m.rateChanges || [])].sort((a, b) => a.date.localeCompare(b.date)).forEach(c => {
+    if (c.date <= date) { if (c.rate != null && c.rate !== '') rate = +c.rate; if (c.frequency) frequency = c.frequency; }
+  });
+  return { rate, frequency };
 }
+export const rateOn = (m, date) => termsOn(m, date).rate;
 export function paymentFor(balance, pct, compounding, freq, years) {
   if (freq === 'accelBiweekly') return round2(paymentFor(balance, pct, compounding, 'monthly', years) / 2);
   const n = PPY[freq]; const i = periodicRate(pct, compounding, n); const N = years * n;
@@ -163,23 +166,56 @@ export function paymentFor(balance, pct, compounding, freq, years) {
   return round2(balance * i / (1 - Math.pow(1 + i, -N)));
 }
 // Walk actual recorded payments and split each into interest + principal.
+// Checkpoints are balances from lender statements (annual statements, balance letters). The ledger is
+// reset to them on their date, so small differences in how the lender counts interest never pile up.
 export function mortgageLedger(s, m, asOf = todayStr()) {
   let bal = +m.principal, ti = 0, tp = 0; const rows = [];
   const pays = live(s, 'transactions')
     .filter(t => t.type === 'mortgage' && t.mortgageId === m.id && t.date > m.startDate && t.date <= asOf)
-    .sort((a, b) => a.date.localeCompare(b.date) || (a.prepayment ? 1 : 0) - (b.prepayment ? 1 : 0));
-  for (const p of pays) {
-    const rate = rateOn(m, p.date); const amt = +p.amount;
+    .map(t => ({ kind: 'pay', date: t.date, t }));
+  const cps = (m.checkpoints || []).filter(c => c.date > m.startDate && c.date <= asOf).map(c => ({ kind: 'cp', date: c.date, c }));
+  const ev = [...pays, ...cps].sort((a, b) => a.date.localeCompare(b.date) || (a.kind === 'cp') - (b.kind === 'cp') || (a.t?.prepayment ? 1 : 0) - (b.t?.prepayment ? 1 : 0));
+  for (const e of ev) {
+    if (e.kind === 'cp') {
+      const adj = round2(+e.c.balance - bal);
+      rows.push({ checkpoint: true, date: e.date, payment: 0, interest: 0, principal: 0, adjust: adj, balance: +e.c.balance, note: e.c.note || 'Lender statement' });
+      bal = +e.c.balance; continue;
+    }
+    const p = e.t, { rate, frequency } = termsOn(m, p.date), amt = +p.amount;
     let interest = 0, principal;
     if (p.prepayment) principal = round2(Math.min(amt, bal));
     else {
-      interest = round2(bal * periodicRate(rate, m.compounding, PPY[m.frequency] || 12));
+      interest = round2(bal * periodicRate(rate, m.compounding, PPY[frequency] || 12));
       principal = round2(Math.min(amt - interest, bal));
     }
     bal = round2(bal - principal); ti += interest; tp += principal;
     rows.push({ txnId: p.id, date: p.date, payment: amt, interest, principal, balance: bal, rate, prepayment: !!p.prepayment });
   }
   return { balance: bal, rows, interestPaid: round2(ti), principalPaid: round2(tp) };
+}
+// Lender's schedule row for a payment date (±3 days), if the amortization schedule was imported.
+export function scheduleRow(m, date) {
+  const t = parseYmd(date).getTime();
+  return (m.schedule || []).find(r => r.date && Math.abs(parseYmd(r.date).getTime() - t) <= 3 * 86400000) || null;
+}
+// "🏡 Principal $x · Interest $y · Balance $z" for each recorded payment (kept in the description).
+export function mortgageNotes(s) {
+  const out = {};
+  const f = n => '$' + (+n).toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  for (const m of live(s, 'mortgages')) for (const r of mortgageLedger(s, m).rows) {
+    if (r.checkpoint) continue;
+    out[r.txnId] = r.prepayment ? `🏡 Prepayment · Principal ${f(r.principal)} · Balance ${f(r.balance)}`
+      : `🏡 Principal ${f(r.principal)} · Interest ${f(r.interest)} · Balance ${f(r.balance)}`;
+  }
+  return out;
+}
+export function refreshMortgageNotes(s) {
+  const notes = mortgageNotes(s); let n = 0;
+  for (const t of s.transactions) {
+    const want = notes[t.id]; if (!want || t.deleted) continue;
+    if ((!t.desc || t.desc.startsWith('🏡 ')) && t.desc !== want) { t.desc = want; t.updatedAt = Date.now(); n++; }
+  }
+  return n;
 }
 export function stepByFreq(d, freq) {
   if (freq === 'weekly') return addDays(d, 7);
@@ -191,15 +227,22 @@ export function stepByFreq(d, freq) {
   return addMonths(d, 1);
 }
 // Future amortization from a balance; extra = additional amount per payment.
-export function project(m, balance, fromDate, extra = 0, today = todayStr()) {
-  const rate = rateOn(m, today);
-  const i = periodicRate(rate, m.compounding, PPY[m.frequency] || 12);
+// firstDate: date of the next payment if known (otherwise one period after fromDate).
+// With an imported lender schedule and no extra payment, the lender's own rows are used first.
+export function project(m, balance, fromDate, extra = 0, today = todayStr(), firstDate = null) {
+  const { rate, frequency } = termsOn(m, today);
+  const i = periodicRate(rate, m.compounding, PPY[frequency] || 12);
   const pay = +m.payment + +extra;
   let bal = balance, d = fromDate, ti = 0, n = 0; const rows = [];
   if (bal <= 0) return { payoffDate: fromDate, periods: 0, totalInterest: 0, rows };
   if (pay <= round2(bal * i)) return { never: true, periods: Infinity, totalInterest: Infinity, rows };
+  const sched = !extra ? (m.schedule || []).filter(r => r.date > fromDate && r.date) : [];
+  if (sched.length && Math.abs(sched[0].balance + sched[0].principal - bal) < Math.max(50, bal * 0.002)) {
+    for (const r of sched) { rows.push({ date: r.date, payment: round2(r.interest + r.principal), interest: r.interest, principal: r.principal, balance: r.balance, lender: true }); ti += r.interest; n++; }
+    bal = sched[sched.length - 1].balance; d = sched[sched.length - 1].date;
+  } else if (firstDate) { d = null; }
   while (bal > 0.004 && n < 3000) {
-    d = stepByFreq(d, m.frequency);
+    d = d === null ? firstDate : stepByFreq(d, frequency);
     const int = round2(bal * i);
     const pr = round2(Math.min(pay - int, bal));
     bal = round2(bal - pr); ti += int; n++;

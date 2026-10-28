@@ -93,7 +93,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; }
 .card { background: var(--card); border-radius: var(--radius); padding: 12px; }
 .card small { color: var(--mute); display: block; font-size: 12px; }
-.card b { font-size: 17px; font-weight: 600; }
+.card > b { font-size: 17px; font-weight: 600; }
 .card.wide { grid-column: span 2; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--card); }
 th, td { padding: 7px 8px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }

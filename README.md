@@ -81,3 +81,33 @@ GitHub Actions builds this repo into a real installable Android app (`ca.kamal.m
 - **Install or update:** on the phone, open **Releases** (the latest "MoneyBook for Android" release) and tap `MoneyBook.apk`. Updates install over the top, and your data is kept.
 - **Full-screen (no address bar):** needs `https://lalli87.github.io/.well-known/assetlinks.json`, served from the `lalli87.github.io` repo.
 - **Signing key:** the key is never stored in this repo. It lives only in the repo secrets and in your private backup. Every update must be signed with the same key.
+
+## Importing statements, CSVs and screenshots
+Use **More › Import statement, CSV or screenshots** and pick several files at once. You can mix banks and cards in one go.
+- **Supported layouts:** tuned for Scotiabank (PDF and CSV), Triangle/Canadian Tire (PDF and CSV), CIBC, Meridian (multi-account PDFs and Visa CSV) and EQ Bank/EQ Card CSV. Other banks work through a generic reader.
+- **Account matching:** each file is matched to an account by its card/account number endings (set in the account's settings). For files without a number, the app learns the file type after you pick the account once.
+- **Duplicates are unticked automatically:**
+  - entries already in the app (same account and amount, within 3 days);
+  - the same purchase in a PDF and a CSV of the same card;
+  - both sides of one transfer (for example, the bank side "Pc To …1234" and the card side "Payment from …5678").
+- **Pending items** are unticked until they post.
+- **Scheduled entries:** an auto-posted repeat payment is corrected to the statement amount instead of being duplicated.
+- **Card statements also save:** statement date, due date, balance due, minimum payment and equal-payment plans. These drive the due-date reminders and cycle prediction.
+
+## Mortgage
+- **Lender documents:** import the lender's PDFs (balance statement, annual statements, amortization schedule) from the import screen or the mortgage screen.
+  - Balances become checkpoints, so the tracked balance matches the lender.
+  - The schedule gives exact future interest/principal splits.
+- **Link past payments** converts old lender-payment expenses (and their repeat) into mortgage payments. Each gets a description like "🏡 Principal $… · Interest $… · Balance $…".
+- **Future payments** appear as scheduled only. They never reduce balances or monthly totals before their date.
+
+## Reminders and suggestions
+- **Needs attention** (top of Transactions) shows:
+  - every card statement that isn't paid yet, using the statement balance due, or an estimate from your balance when no statement was imported;
+  - utility bills you haven't added yet.
+- **Smart suggestions** finds:
+  - duplicate or outdated repeat payments;
+  - regular charges that aren't scheduled. Phone and internet are added as auto-posting. Utilities become "remind me to add it" repeats, because their amounts vary.
+
+## Privacy
+This repository contains only the app's code. Your data lives on your devices and in your Google Drive app folder. Setup files made from your statements are imported through **More › Google Drive sync & backup › Import backup** and are never stored here.

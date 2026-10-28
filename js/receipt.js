@@ -88,9 +88,16 @@ export function suggest(s, merchant, last4) {
   let rule = key && rules.find(r => r.key === key);
   if (!rule && key) { const w = key.split(' ')[0]; rule = rules.find(r => r.key.split(' ')[0] === w && w.length > 3); }
   let accountId = rule?.accountId && get(s, 'accounts', rule.accountId) ? rule.accountId : null;
-  if (last4) { const a = live(s, 'accounts').find(a => a.cardLast4 === last4); if (a) accountId = a.id; }
+  if (last4) { const a = live(s, 'accounts').find(a => a.cardLast4 === last4 || String(a.numbers || '').split(/[,;\s]+/).some(x => x.replace(/\D/g, '').slice(-4) === last4)); if (a) accountId = a.id; }
   const categoryId = rule?.categoryId && get(s, 'categories', rule.categoryId) ? rule.categoryId : null;
   return { rule, accountId, categoryId };
+}
+// Transfers you confirm (e.g. "Card Load" EQ Bank → EQ Card) are remembered per account pair.
+export function learnTransfer(s, merchant, accountId, transferAccountId) {
+  const key = merchantKey(merchant); if (!key || !transferAccountId) return;
+  const id = 'rule_' + key.replace(/ /g, '_');
+  const old = s.rules.find(r => r.id === id && !r.deleted);
+  put(s, 'rules', { id, key, merchant, accountId, transferAccountId, categoryId: old?.categoryId, hits: (old?.hits || 0) + 1 });
 }
 export function learn(s, merchant, accountId, categoryId) {
   const key = merchantKey(merchant); if (!key || !categoryId) return;

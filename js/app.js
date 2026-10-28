@@ -3,6 +3,7 @@ import * as DB from './db.js';
 import * as Sync from './sync.js';
 import * as R from './receipt.js';
 import * as I from './importer.js';
+import * as X from './insights.js';
 
 // ---------- globals ----------
 let S;                                   // synced app state
@@ -25,6 +26,7 @@ function toast(msg, ms = 2600) { const t = $('#toast'); t.textContent = msg; t.c
 
 let saveTimer;
 function commit() {
+  M.refreshMortgageNotes(S);
   render();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
@@ -75,13 +77,17 @@ async function doSync(interactive = true) {
 function notifyUpcoming() {
   const days = S.settings.remindDays ?? 3;
   const due = M.projected(S, today(), M.addDays(today(), days));
-  if (!due.length || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const cards = X.cardStatuses(S).filter(c => c.status === 'overdue' || (c.status === 'due' && c.daysLeft <= days));
+  const bills = X.billReminders(S, today(), days);
+  if ((!due.length && !cards.length && !bills.length) || !('Notification' in window) || Notification.permission !== 'granted') return;
   if (L.lastNotified === today()) return;
   L.lastNotified = today(); saveLocal();
-  const total = due.reduce((a, t) => a + (t.type === 'income' ? 0 : +t.amount), 0);
-  navigator.serviceWorker?.ready.then(reg => reg.showNotification('Upcoming payments', {
-    body: `${due.length} payment(s) in the next ${days} days — ${fmt(total)}\n` + due.slice(0, 4).map(t => `${t.date.slice(5)} ${t.note || ''} ${fmt(t.amount)}`).join('\n'),
-    icon: 'icons/icon-192.png', tag: 'upcoming'
+  const lines = [
+    ...cards.map(c => `💳 ${c.account.name}: ${fmt(c.remaining)} ${c.status === 'overdue' ? 'OVERDUE' : 'due ' + c.dueDate.slice(5)}`),
+    ...bills.map(b => `🔌 Add ${b.recurring.template.note || 'bill'} (~${fmt(b.recurring.template.amount)})`),
+    ...due.slice(0, 4).map(t => `${t.date.slice(5)} ${t.note || ''} ${fmt(t.amount)}`)];
+  navigator.serviceWorker?.ready.then(reg => reg.showNotification(cards.length ? 'Card payment due' : 'Upcoming payments', {
+    body: lines.slice(0, 6).join('\n'), icon: 'icons/icon-192.png', tag: 'upcoming'
   })).catch(() => {});
 }
 
@@ -126,13 +132,17 @@ function txRow(t, splits = {}) {
   const cls = t.type === 'income' ? 'inc' : t.type === 'transfer' ? 'xfer' : 'exp';
   let acc = M.accName(S, t.accountId);
   if (t.type === 'transfer') acc += ' → ' + M.accName(S, t.toAccountId);
-  if (t.type === 'mortgage') { const sp = splits[t.id]; acc += sp ? ` · P ${fmt(sp.principal)} / I ${fmt(sp.interest)}` : ` · ${esc(M.get(S, 'mortgages', t.mortgageId)?.name || '')}`; }
+  if (t.type === 'mortgage') {
+    const m = M.get(S, 'mortgages', t.mortgageId);
+    const sp = splits[t.id] || (t.projected && m && M.scheduleRow(m, t.date));
+    acc += sp ? ` · P ${fmt(sp.principal)} / I ${fmt(sp.interest)}` : ` · ${esc(m?.name || '')}`;
+  }
   const target = t.projected && t.recurringId && !M.get(S, 'transactions', t.id)
     ? `data-act="editRule" data-id="${t.recurringId}"` : `data-act="editTxn" data-id="${t.id}"`;
   const freq = t.recurringId ? (M.FREQS[M.get(S, 'recurring', t.recurringId)?.freq] || '') : '';
   return `<div class="tx ${t.projected ? 'proj' : ''}" ${target}>
     <div class="tx-cat">${esc(txLabel(t))}</div>
-    <div class="tx-main"><div>${esc(t.note || '')} ${t.projected ? '<span class="badge">Scheduled</span>' : ''}</div>
+    <div class="tx-main"><div>${esc(t.note || '')} ${t.remind ? '<span class="badge">Reminder</span>' : t.projected ? '<span class="badge">Scheduled</span>' : ''}</div>
     <small>${esc(acc)}${freq ? ' (' + freq + ')' : ''}</small></div>
     <div class="amt ${cls}">${fmt(t.amount)}</div></div>`;
 }
@@ -159,6 +169,7 @@ function viewTrans() {
   [...posted, ...proj].forEach(t => (byDay[t.date] = byDay[t.date] || []).push(t));
   const dates = Object.keys(byDay).sort().reverse();
   let h = monthNav() + `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
+  h += attentionHtml();
   if (soon.length) h += `<div class="banner">⏰ <b>${soon.length} upcoming</b> in the next ${days} days — ${fmt(soonTotal)}. Not deducted from balances until the due date.</div>`;
   if (!dates.length) h += '<div class="empty">No transactions this month.<br>Tap + to add one.</div>';
   for (const d of dates) {
@@ -252,6 +263,7 @@ function viewMore() {
     ${item('manageAccounts', '🏦', 'Accounts & groups')}
     ${item('receiptRules', '🧾', 'Receipt learning', `${nl} merchant${nl === 1 ? '' : 's'} learned`)}
   </div><div class="menu">
+    ${item('suggestions', '✨', 'Smart suggestions', 'Duplicate schedules, regular bills not yet scheduled')}
     ${item('importStatement', '📥', 'Import statement, CSV or screenshots', 'PDF statements, bank CSV files, banking-app screenshots')}
     ${item('dupScan', '🧹', 'Find duplicate entries', 'Clean up anything recorded twice')}
   </div><div class="menu">
@@ -400,6 +412,7 @@ function editRecurring(r) {
       <label class="f-to">To account<select name="toAccountId">${accountOptions(t.toAccountId, { allowEmpty: true })}</select></label>
       <label class="f-cat">Category<select name="categoryId"></select></label>
       <label class="f-mort">Mortgage<select name="mortgageId">${mortgageOptions(t.mortgageId)}</select></label>
+      <label>When it's due<select name="mode"><option value="auto" ${r.mode !== 'remind' ? 'selected' : ''}>Post it automatically (fixed amount / auto-debit)</option><option value="remind" ${r.mode === 'remind' ? 'selected' : ''}>Remind me to add it (amount varies, e.g. utilities)</option></select></label>
       <label class="check"><input type="checkbox" name="gcal" ${r.gcalEventId ? 'checked' : ''}> 🔔 Google Calendar reminder (${S.settings.remindDays ?? 3} days before + on the day)</label>
       ${!isNew ? `<label class="check"><input type="checkbox" name="paused" ${r.paused ? 'checked' : ''}> Paused</label>` : ''}
       ${isNew ? `<label class="check f-back"><input type="checkbox" name="backfill"> Also create past occurrences since the start date</label>` : ''}
@@ -436,7 +449,7 @@ function editRecurring(r) {
     if (t.type === 'mortgage' && !t.mortgageId) return toast('Add a mortgage first');
     if (t.type === 'transfer' && (!t.toAccountId || t.toAccountId === t.accountId)) return toast('Choose a different “to” account');
     const startChanged = r.startDate !== f.startDate.value || r.freq !== f.freq.value;
-    r.freq = f.freq.value; r.startDate = f.startDate.value; r.endDate = f.endDate.value || undefined;
+    r.freq = f.freq.value; r.startDate = f.startDate.value; r.endDate = f.endDate.value || undefined; r.mode = f.mode.value;
     if (!isNew) r.paused = f.paused.checked;
     if (isNew || startChanged) {
       // Don't flood the past with entries unless asked.
@@ -525,10 +538,13 @@ function mortgageDetail(m) {
   const t0 = today();
   const Lg = M.mortgageLedger(S, m, t0);
   const lastDate = Lg.rows.length ? Lg.rows[Lg.rows.length - 1].date : m.startDate;
-  const pr = M.project(m, Lg.balance, lastDate, 0, t0);
+  const rec = M.live(S, 'recurring').find(r => r.template?.type === 'mortgage' && r.template.mortgageId === m.id && !r.paused);
+  const firstDate = (rec && M.nextDue(rec, t0, 1)[0]) || (m.nextDue > t0 ? m.nextDue : null);
+  const pr = M.project(m, Lg.balance, lastDate, 0, t0, firstDate);
+  const pays = Lg.rows.filter(r => !r.checkpoint);
   const rate = M.rateOn(m, t0);
   const yr = t0.slice(0, 4);
-  const ytd = Lg.rows.filter(r => r.date.startsWith(yr));
+  const ytd = pays.filter(r => r.date.startsWith(yr));
   const ytdI = ytd.reduce((a, r) => a + r.interest, 0), ytdP = ytd.reduce((a, r) => a + r.principal, 0);
   const next = pr.rows[0];
   const payoff = pr.never ? 'Never — payment too low' : `${MONTHS[+pr.payoffDate.slice(5, 7) - 1]} ${pr.payoffDate.slice(0, 4)}`;
@@ -544,21 +560,39 @@ function mortgageDetail(m) {
     <div class="btnrow">
       <button class="secondary" id="pay">Record payment</button><button class="secondary" id="pre">Prepayment</button>
       <button class="secondary" id="rate">Rate change</button><button class="secondary" id="edit">Edit</button>
+      <button class="secondary" id="link">Link past payments</button><button class="secondary" id="doc">Import lender PDF</button>
     </div>
+    ${!rec ? `<div class="banner">No repeat payment is set up for this mortgage yet${firstDate ? ` (next due ${firstDate})` : ''}. <button class="secondary" id="mkrec" style="padding:4px 10px">Create it</button></div>` : ''}
     <div class="section-title">What if I pay extra each payment?</div>
     <div class="pad" style="padding-top:0"><div class="two"><input type="number" id="extra" step="10" placeholder="Extra $ per payment"><div id="whatif" class="hint" style="margin:10px 0 0"></div></div></div>
-    <div class="section-title">Payment history (${Lg.rows.length})</div>
+    ${m.annual && Object.keys(m.annual).length ? `<div class="section-title">From your lender's annual statements</div>
+    <div class="tablewrap"><table><tr><th>Year</th><th>Paid</th><th>Interest</th><th>Principal</th><th>Year-end balance</th></tr>
+      ${Object.entries(m.annual).sort().reverse().map(([y, a]) => `<tr><td>${y}</td><td>${fmt(a.paid)}</td><td>${fmt(a.interest)}</td><td>${fmt(a.principal)}</td><td>${fmt(a.closing)}</td></tr>`).join('')}</table></div>` : ''}
+    <div class="section-title">Payment history (${pays.length})</div>
     <div class="tablewrap"><table><tr><th>Date</th><th>Paid</th><th>Interest</th><th>Principal</th><th>Balance</th></tr>
-      ${[...Lg.rows].reverse().slice(0, 60).map(r => `<tr><td>${r.date}${r.prepayment ? ' ⚡' : ''}</td><td>${fmt(r.payment)}</td><td>${fmt(r.interest)}</td><td>${fmt(r.principal)}</td><td>${fmt(r.balance)}</td></tr>`).join('') || '<tr><td colspan="5">No payments recorded after the balance date yet.</td></tr>'}</table></div>
-    <div class="section-title">Upcoming schedule</div>
+      ${[...Lg.rows].reverse().slice(0, 80).map(r => r.checkpoint
+        ? `<tr><td>${r.date} 📄</td><td colspan="3" style="text-align:left">${esc(r.note)}${Math.abs(r.adjust) >= 0.01 ? ` (true-up ${r.adjust > 0 ? '+' : ''}${fmt(r.adjust)})` : ' ✓ matches'}</td><td>${fmt(r.balance)}</td></tr>`
+        : `<tr><td>${r.date}${r.prepayment ? ' ⚡' : ''}</td><td>${fmt(r.payment)}</td><td>${fmt(r.interest)}</td><td>${fmt(r.principal)}</td><td>${fmt(r.balance)}</td></tr>`).join('') || '<tr><td colspan="5">No payments recorded after the start date yet — use “Link past payments”.</td></tr>'}</table></div>
+    <div class="section-title">Upcoming schedule${pr.rows[0]?.lender ? ' (from your lender)' : ''}</div>
+    <div class="hint pad" style="padding-top:0">Future payments are shown as scheduled only — they never reduce today's balances or count in monthly totals until the payment date.</div>
     <div class="tablewrap"><table><tr><th>Date</th><th>Interest</th><th>Principal</th><th>Balance</th></tr>
-      ${pr.rows.slice(0, 26).map(r => `<tr><td>${r.date}</td><td>${fmt(r.interest)}</td><td>${fmt(r.principal)}</td><td>${fmt(r.balance)}</td></tr>`).join('')}</table></div>
-    ${(m.rateChanges || []).length ? `<div class="hint pad">Rate changes: ${(m.rateChanges || []).map(c => `${c.date} → ${c.rate}%`).join(', ')}</div>` : ''}
-    <div class="hint pad">Interest is calculated per payment period using Canadian rules (fixed rates compound semi-annually). Small differences from your lender's statement are normal — re-enter the statement balance in Edit any time to true it up.</div>`);
+      ${pr.rows.slice(0, 60).map(r => `<tr><td>${r.date}</td><td>${fmt(r.interest)}</td><td>${fmt(r.principal)}</td><td>${fmt(r.balance)}</td></tr>`).join('')}</table></div>
+    ${(m.rateChanges || []).length ? `<div class="hint pad">Terms history: ${[...(m.rateChanges || [])].sort((a, b) => a.date.localeCompare(b.date)).map(c => `${c.date} → ${c.rate ? c.rate + '%' : ''}${c.frequency ? ' ' + M.MORT_FREQ[c.frequency] : ''}${c.payment ? ' ' + fmt(c.payment) : ''}`).join(' · ')}</div>` : ''}
+    <div class="hint pad">Interest is calculated per payment using Canadian rules (fixed rates compound semi-annually). Balances from lender statements are used as checkpoints, so the tracked balance always lines up with your statements.</div>`);
   const pay = { type: 'mortgage', mortgageId: m.id, amount: m.payment, note: m.lender || m.name };
   body.querySelector('#pay').onclick = () => editTxn(null, pay);
   body.querySelector('#pre').onclick = () => editTxn(null, { ...pay, amount: '', prepayment: true, note: 'Mortgage prepayment' });
   body.querySelector('#edit').onclick = () => editMortgage(m);
+  body.querySelector('#link').onclick = () => linkMortgagePayments(m);
+  body.querySelector('#mkrec')?.addEventListener('click', () => {
+    const payers = {}; M.live(S, 'transactions').filter(t => t.type === 'mortgage' && t.mortgageId === m.id).forEach(t => (payers[t.accountId] = (payers[t.accountId] || 0) + 1));
+    const payer = Object.entries(payers).sort((a, b) => b[1] - a[1])[0]?.[0] || defaultAccount();
+    const freq = { monthly: 'monthly', biweekly: 'biweekly', accelBiweekly: 'biweekly', weekly: 'weekly', semimonthly: 'monthly' }[m.frequency] || 'monthly';
+    const start = firstDate || M.addDays(t0, 1);
+    M.put(S, 'recurring', { id: M.uid(), freq, interval: 1, startDate: start, materializedThrough: t0, template: { type: 'mortgage', amount: m.payment, accountId: payer, mortgageId: m.id, note: m.lender || m.name } });
+    commit(); toast(`Repeat payment created from ${M.accName(S, payer)}`); mortgageDetail(m);
+  });
+  body.querySelector('#doc').onclick = () => importStatement();
   body.querySelector('#rate').onclick = () => {
     const d = prompt('Date the new rate starts (YYYY-MM-DD)', t0); if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
     const r = parseFloat(prompt('New annual rate %', rate)); if (!(r >= 0)) return;
@@ -570,7 +604,7 @@ function mortgageDetail(m) {
   body.querySelector('#extra').oninput = e => {
     const x = +e.target.value; const out = body.querySelector('#whatif');
     if (!(x > 0) || pr.never) return (out.textContent = '');
-    const p2 = M.project(m, Lg.balance, lastDate, x, t0);
+    const p2 = M.project(m, Lg.balance, lastDate, x, t0, firstDate || pr.rows[0]?.date);
     const months = Math.round((M.parseYmd(pr.payoffDate) - M.parseYmd(p2.payoffDate)) / (86400000 * 30.44));
     out.innerHTML = `Paid off <b>${MONTHS[+p2.payoffDate.slice(5, 7) - 1]} ${p2.payoffDate.slice(0, 4)}</b> (${months} months sooner), saving <b class="inc">${fmt(pr.totalInterest - p2.totalInterest)}</b> interest.`;
   };
@@ -622,8 +656,12 @@ function editAccount(a) {
     <label>Group<select name="groupId">${sortedGroups().map(g => `<option value="${g.id}" ${g.id === a.groupId ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>
     <label>Name<input name="name" value="${esc(a.name)}" required></label>
     <label>Current balance (negative for money owed, e.g. card or loan)<input type="number" step="0.01" name="balance" value="${M.round2(cur)}"></label>
-    <div class="two"><label>Card statement day (cards)<input type="number" min="1" max="31" name="statementDay" value="${a.statementDay || ''}"></label>
-    <label>Card last 4 digits (for receipts)<input name="cardLast4" maxlength="4" inputmode="numeric" value="${esc(a.cardLast4 || '')}"></label></div>
+    <label>Card / account number endings<input name="numbers" inputmode="numeric" placeholder="e.g. 1234, 5678" value="${esc(I.accountEndings(a).join(', '))}"></label>
+    <div class="hint" style="margin-top:-4px">Last 4 digits of every card/account number on this account — used to pick the right account for statements, CSVs, receipts and transfers.</div>
+    <div class="two"><label>Statement day (cards)<input type="number" min="1" max="31" name="statementDay" value="${a.statementDay || ''}"></label>
+    <label>Payment due (days after statement)<input type="number" min="1" max="40" name="dueDays" value="${a.dueDays || ''}" placeholder="learned"></label></div>
+    <label>Name on bank statements (multi-account PDFs)<input name="labels" value="${esc((a.statementLabels || []).join('; '))}" placeholder="e.g. Chequing 0"></label>
+    ${accountCycleInfo(a)}
     <label class="check"><input type="checkbox" name="inc" ${a.includeInTotals !== false ? 'checked' : ''}> Include in totals</label>
     <label class="check"><input type="checkbox" name="hidden" ${a.hidden ? 'checked' : ''}> Hide account</label>
     <div class="row"><button class="primary">Save</button>${!isNew ? '<button type="button" id="del" class="danger">Delete</button>' : ''}</div></form>`);
@@ -634,10 +672,21 @@ function editAccount(a) {
     const target = parseFloat(f.balance.value) || 0;
     // Setting the "current balance" adjusts the opening balance so history stays intact.
     a.opening = M.round2((+a.opening || 0) + (target - cur));
-    Object.assign(a, { groupId: f.groupId.value, name: fv(f, 'name'), statementDay: +f.statementDay.value || undefined,
-      cardLast4: fv(f, 'cardLast4') || undefined, includeInTotals: f.inc.checked, hidden: f.hidden.checked });
+    Object.assign(a, { groupId: f.groupId.value, name: fv(f, 'name'), statementDay: +f.statementDay.value || undefined, dueDays: +f.dueDays.value || undefined,
+      numbers: fv(f, 'numbers') || undefined, cardLast4: undefined, statementLabels: fv(f, 'labels').split(';').map(x => x.trim()).filter(Boolean),
+      includeInTotals: f.inc.checked, hidden: f.hidden.checked });
     M.put(S, 'accounts', a); closeSheet(); commit(); toast('Account saved');
   };
+}
+function accountCycleInfo(a) {
+  if (I.accountKind(S, a.id) !== 'card' && !(a.cycles || []).length) return '';
+  const pc = X.predictCycle(a);
+  const cyc = [...(a.cycles || [])].reverse().filter(c => c.dueDate).slice(0, 3);
+  const plans = (a.plans || []).filter(p => !p.expiry || p.expiry >= today());
+  return `<div class="card" style="margin-bottom:10px"><small>Statement cycle</small>
+    ${pc ? `<b style="font-size:14px">Next statement ~${pc.next} · due ~${pc.nextDue}</b><small>Learned from ${(a.cycles || []).length} statement date(s) (${{ dom: 'same day each month', eom: 'same distance from month end', len: 'fixed cycle length' }[pc.method]}); payment due ${pc.dueGap} days after.</small>` : '<small>Import a statement or set the statement day to get due-date reminders.</small>'}
+    ${cyc.map(c => `<small>${c.statementDate} → due ${c.dueDate} · ${fmt(c.balanceDue ?? c.newBalance ?? 0)}${c.minPayment ? ` (min ${fmt(c.minPayment)})` : ''}</small>`).join('')}
+    ${plans.length ? `<small style="margin-top:6px"><b>Equal payment plans</b> (not due all at once): ${plans.map(p => `${p.start} ${fmt(p.original)} → ${fmt(p.monthly)}/mo until ${p.expiry}`).join('; ')}</small>` : ''}</div>`;
 }
 function editGroup(g) {
   const isNew = !g; g = g ? { ...g } : { id: M.uid(), name: '', kind: 'asset', order: S.groups.length };
@@ -673,6 +722,7 @@ function syncScreen() {
     <div class="section-title">Backup</div>
     <div class="btnrow" style="padding:0"><button class="secondary" id="exp">Export backup (.json)</button><button class="secondary" id="imp">Import backup</button><button class="secondary" id="csv">Export CSV</button></div>
     <input type="file" id="impFile" accept=".json,application/json" hidden>
+    <div class="hint">“Import backup” also accepts a MoneyBook setup file (card numbers, statement cycles, mortgage details).</div>
     <div class="row"><button class="danger" id="out">Sign out of Google on this device</button></div>`);
   const f = body.querySelector('#f');
   f.onsubmit = async e => {
@@ -692,7 +742,9 @@ function syncScreen() {
   body.querySelector('#impFile').onchange = async e => {
     const file = e.target.files[0]; if (!file) return;
     try {
-      const data = M.migrate(JSON.parse(await file.text()));
+      const raw = JSON.parse(await file.text());
+      if (raw.type === 'moneybook-setup') return applySetup(raw);
+      const data = M.migrate(raw);
       const n = M.live(data, 'transactions').length;
       const b2 = openSheet('Import backup', `<div class="hint">“${esc(file.name)}” has ${n} transactions and ${M.live(data, 'accounts').length} accounts.</div>
         <div class="list">
@@ -767,11 +819,11 @@ function showStatsCat(topId) {
 // ---------- statement / CSV / screenshot import ----------
 function importStatement() {
   const body = openSheet('Import transactions', `
-    <div class="hint">Pick one or more files. They are read <b>on this device</b> — nothing is uploaded.</div>
+    <div class="hint">Pick one or more files — mixing banks and cards is fine. They are read <b>on this device</b>; nothing is uploaded.</div>
     <div class="list">
-      <div class="li"><span style="font-size:20px">📄</span><div class="grow">PDF statement<small>Credit card or bank statement downloaded from online banking</small></div></div>
-      <div class="li"><span style="font-size:20px">📊</span><div class="grow">CSV file<small>“Download transactions” from Scotia, CIBC, EQ, Wealthsimple…</small></div></div>
-      <div class="li"><span style="font-size:20px">📱</span><div class="grow">Screenshots<small>Banking-app transaction lists — several at once is fine, overlaps are removed</small></div></div>
+      <div class="li"><span style="font-size:20px">📄</span><div class="grow">PDF statements<small>Scotia, Triangle, CIBC, Meridian (incl. multi-account statements)… and mortgage statements / amortization schedules</small></div></div>
+      <div class="li"><span style="font-size:20px">📊</span><div class="grow">CSV downloads<small>Scotia, EQ Bank & EQ Card, Triangle, Meridian Visa, CIBC…</small></div></div>
+      <div class="li"><span style="font-size:20px">📱</span><div class="grow">Screenshots<small>Banking-app transaction lists — overlaps between screenshots are removed</small></div></div>
     </div>
     <div class="row"><button class="primary" id="pick">Choose files</button></div>
     <input type="file" id="files" multiple accept=".pdf,application/pdf,.csv,text/csv,text/plain,image/*" hidden>
@@ -780,69 +832,103 @@ function importStatement() {
   body.querySelector('#pick').onclick = () => body.querySelector('#files').click();
   body.querySelector('#files').onchange = async e => {
     const files = [...e.target.files]; if (!files.length) return;
-    let text = '', items = [], csvTables = [], notes = [];
+    const batches = [], notes = [], mortgageDocs = [];
     try {
       for (const [i, f] of files.entries()) {
         const tag = `${i + 1}/${files.length} ${f.name}`;
         if (/pdf$/i.test(f.type) || /\.pdf$/i.test(f.name)) {
           msg(`Reading ${tag}…`);
           const r = await I.readPdf(f, p => msg(`Reading ${tag}… ${Math.round(p * 100)}%`), (c, pr) => R.ocr(c, pr));
-          text += r.lines.join('\n') + '\n';
-          items.push(...I.parseStatementText(r.lines, f.name));
+          const md = I.parseMortgageDoc(r.lines);
+          if (md) { mortgageDocs.push({ name: f.name, doc: md }); continue; }
+          const { rows, meta } = I.parseStatement(r.lines, f.name);
+          batches.push({ name: f.name, kind: 'pdf', rows, meta, endings: meta.endings || [] });
           if (r.scanned) notes.push(`${f.name} is a scanned PDF — double-check amounts.`);
         } else if (/csv|text/i.test(f.type) || /\.(csv|txt)$/i.test(f.name)) {
-          csvTables.push({ name: f.name, table: I.parseCsvText(await f.text()) });
+          const table = I.parseCsvText(await f.text());
+          const probe = I.parseCsvRows(table, 'asset', f.name);
+          batches.push({ name: f.name, kind: 'csv', table, endings: probe.endings || [], sig: probe.sig });
         } else if (/^image\//.test(f.type)) {
           msg(`Reading ${tag}… (first time downloads the text reader, ~10 MB)`);
           const t = await R.ocr(f, p => msg(`Reading ${tag}… ${Math.round(p * 100)}%`));
-          text += t + '\n';
-          items.push(...I.parseStatementText(t.split(/\r?\n/), f.name, { negIsOut: true }));
+          const { rows, meta } = I.parseStatement(t.split(/\r?\n/), f.name, { negIsOut: true });
+          batches.push({ name: f.name, kind: 'image', rows, meta, endings: I.findAllLast4(t) });
         } else notes.push(`Skipped ${f.name} (unsupported type).`);
       }
     } catch (err) { return msg('Could not read the file: ' + err.message); }
-    const last4 = I.findLast4(text);
-    const byCard = last4 && M.live(S, 'accounts').find(a => a.cardLast4 === last4);
-    importReview({ items, csvTables, notes, last4, accountId: byCard?.id || L.lastImportAccount || defaultAccount(), auto: !!byCard });
+    if (mortgageDocs.length) { mortgageDocImport(mortgageDocs, !batches.length); if (!batches.length) return; }
+    for (const b of batches) {
+      const m = I.matchAccount(S, { endings: b.endings, sig: b.sig, filename: b.name });
+      b.accountId = m?.account.id || L.lastImportAccount || defaultAccount(); b.how = m?.how || null;
+      const secs = [...new Set((b.rows || []).map(r => r.section).filter(Boolean))];
+      if (secs.length > 1) { b.sectionAcc = {}; secs.forEach(s => (b.sectionAcc[s] = I.sectionAccount(S, s)?.id || '')); }
+    }
+    importReview({ batches, notes });
   };
 }
 
 function importReview(ctx) {
-  const st = { accountId: ctx.accountId, flip: false, rows: [] };
+  const st = { flip: false, rows: [] };
+  const accFor = (b, r) => (b.sectionAcc && r.section && b.sectionAcc[r.section]) || b.accountId;
   function build() {
-    const kind = I.accountKind(S, st.accountId);
-    let rows = ctx.items.map(r => ({ ...r }));
-    ctx.csvTables.forEach(t => rows.push(...I.parseCsvRows(t.table, kind, t.name).rows));
-    if (st.flip) rows.forEach(r => (r.dir = r.dir === 'out' ? 'in' : 'out'));
+    const rows = [];
+    ctx.batches.forEach((b, bi) => {
+      const parsed = b.kind === 'csv' ? I.parseCsvRows(b.table, I.accountKind(S, b.accountId), b.name).rows : b.rows.map(r => ({ ...r }));
+      for (const r of parsed) {
+        r.bi = bi; r.accountId = accFor(b, r);
+        r.dir = I.resolveDir(r, I.accountKind(S, r.accountId), b.meta?.kind);
+        if (st.flip) r.dir = r.dir === 'out' ? 'in' : 'out';
+      }
+      rows.push(...parsed);
+    });
     rows.sort((a, b) => a.date.localeCompare(b.date));
-    I.markDuplicates(S, rows, st.accountId);
-    const payer = I.usualPayer(S, st.accountId);
     for (const r of rows) {
-      r.on = !r.dup;
-      if (r.dir === 'in' && kind === 'card' && I.isPayment(r.desc)) { r.type = 'transfer'; r.other = payer || ''; }
-      else if (r.dir === 'out' && kind !== 'card' && /credit card|visa|mastercard|amex|card payment/i.test(r.desc)) {
-        r.type = 'transfer'; r.other = M.live(S, 'accounts').find(a => I.accountKind(S, a.id) === 'card' && r.desc.includes(a.cardLast4 || '----'))?.id || '';
-      } else {
+      const kind = I.accountKind(S, r.accountId);
+      const cp = I.counterpartAccount(S, r.raw || r.desc, r.accountId);
+      const sg = R.suggest(S, r.desc);
+      const tr = sg.rule?.transferAccountId && (sg.rule.accountId === r.accountId || sg.rule.transferAccountId === r.accountId) ? (sg.rule.accountId === r.accountId ? sg.rule.transferAccountId : sg.rule.accountId) : null;
+      if (cp) { r.type = 'transfer'; r.other = cp.id; }
+      else if (tr && M.get(S, 'accounts', tr)) { r.type = 'transfer'; r.other = tr; }
+      else if (r.dir === 'in' && kind === 'card' && I.isPayment(r.desc)) { r.type = 'transfer'; r.other = I.usualPayer(S, r.accountId) || ''; }
+      else if (r.dir === 'out' && kind !== 'card' && /credit card|visa|mastercard|card payment|cc pay|loc pay/i.test(r.desc)) { r.type = 'transfer'; r.other = ''; }
+      else {
         r.type = r.dir === 'out' ? 'expense' : 'income';
-        r.categoryId = (r.type === 'expense' && R.suggest(S, r.desc).categoryId) || '';
+        const c = sg.categoryId && M.get(S, 'categories', sg.categoryId);
+        r.categoryId = c && c.type === r.type ? c.id : bankCategory(r.bankCat, r.type);
       }
     }
+    I.markDuplicates(S, rows);
+    rows.forEach(r => (r.on = (!r.dup || r.dup.reason === 'scheduled') && !r.pending && !!r.accountId));
     st.rows = rows;
+  }
+  function bankCategory(label, type) {
+    if (!label) return '';
+    const l = label.toLowerCase().slice(0, 5);
+    return M.live(S, 'categories').find(c => c.type === type && c.name.toLowerCase().startsWith(l))?.id || '';
   }
   function render() {
     const rows = st.rows, sel = rows.filter(r => r.on);
-    const dups = rows.filter(r => r.dup).length;
-    const acc = M.get(S, 'accounts', st.accountId);
+    const dups = rows.filter(r => r.dup && r.dup.reason !== 'scheduled').length, upd = rows.filter(r => r.dup?.reason === 'scheduled').length;
+    const multi = new Set(rows.map(r => r.accountId)).size > 1;
     const body = openSheet('Review import', `
-      <label>Account these transactions belong to<select id="acc">${accountOptions(st.accountId)}</select></label>
-      <div class="hint">${ctx.auto ? `Matched card ending ${esc(ctx.last4)} to “${esc(acc?.name)}”. ` : ctx.last4 ? `Statement card ends in ${esc(ctx.last4)} — set that on the account to auto-pick it next time. ` : ''}
-        ${rows.length} found · <b>${dups} duplicate${dups === 1 ? '' : 's'}</b> unticked · ${sel.length} selected.</div>
+      ${ctx.batches.map((b, bi) => `<div class="card" style="margin-bottom:8px">
+        <small>${b.kind === 'pdf' ? '📄' : b.kind === 'csv' ? '📊' : '📱'} ${esc(b.name)}${b.meta?.statementDate ? ` · statement ${b.meta.statementDate}` : ''}${b.meta?.dueDate ? ` · due ${b.meta.dueDate}` : ''}</small>
+        ${b.sectionAcc ? Object.keys(b.sectionAcc).map(s => `<label>“${esc(s)}” goes to<select data-b="${bi}" data-sec="${esc(s)}">${accountOptions(b.sectionAcc[s], { allowEmpty: true })}</select></label>`).join('')
+          : `<label style="margin:4px 0 0">Account<select data-b="${bi}">${accountOptions(b.accountId)}</select></label>`}
+        ${b.how === 'number' ? `<small>Matched by card/account number.</small>` : b.how === 'signature' ? '<small>Matched from a previous import of this file type.</small>' : b.endings?.length ? `<small>Number ending ${esc(b.endings.join(', '))} — saved to the account you pick, so next time it's automatic.</small>` : ''}
+      </div>`).join('')}
+      <div class="hint">${rows.length} found · <b>${dups} duplicate${dups === 1 ? '' : 's'}</b> unticked${upd ? ` · ${upd} will update scheduled entries` : ''}${rows.some(r => r.pending) ? ' · pending items unticked' : ''} · ${sel.length} selected.</div>
       ${ctx.notes.map(n => `<div class="hint">⚠️ ${esc(n)}</div>`).join('')}
       <div class="btnrow" style="padding:0 0 8px"><button class="secondary" id="all">Select all</button><button class="secondary" id="nodup">Untick duplicates</button><button class="secondary" id="flip">Swap in / out</button></div>
-      <div class="list" id="rows">${rows.map((r, i) => rowHtml(r, i)).join('') || '<div class="empty">No transactions recognised in these files. Send me a sample so I can teach the app this layout.</div>'}</div>
+      <div class="list" id="rows">${rows.map((r, i) => rowHtml(r, i, multi)).join('') || '<div class="empty">No transactions recognised in these files. Send a sample to have this layout added.</div>'}</div>
       <div class="sticky-bar"><button class="primary" id="go" style="width:100%" ${sel.length ? '' : 'disabled'}>Import ${sel.length} transaction${sel.length === 1 ? '' : 's'}</button></div>`);
-    body.querySelector('#acc').onchange = e => { st.accountId = e.target.value; L.lastImportAccount = st.accountId; saveLocal(); build(); render(); };
-    body.querySelector('#all').onclick = () => { rows.forEach(r => (r.on = true)); render(); };
-    body.querySelector('#nodup').onclick = () => { rows.forEach(r => r.dup && (r.on = false)); render(); };
+    body.querySelectorAll('select[data-b]').forEach(s => (s.onchange = e => {
+      const b = ctx.batches[+s.dataset.b];
+      if (s.dataset.sec) b.sectionAcc[s.dataset.sec] = e.target.value; else { b.accountId = e.target.value; b.how = null; L.lastImportAccount = b.accountId; saveLocal(); }
+      build(); render();
+    }));
+    body.querySelector('#all').onclick = () => { rows.forEach(r => (r.on = !!r.accountId)); render(); };
+    body.querySelector('#nodup').onclick = () => { rows.forEach(r => r.dup && r.dup.reason !== 'scheduled' && (r.on = false)); render(); };
     body.querySelector('#flip').onclick = () => { st.flip = !st.flip; build(); render(); };
     body.querySelector('#rows').onchange = e => {
       const i = +e.target.closest('[data-i]')?.dataset.i; const r = rows[i]; if (!r) return;
@@ -851,44 +937,278 @@ function importReview(ctx) {
       if (k === 'type') { r.type = e.target.value; r.categoryId = ''; r.other = ''; }
       if (k === 'cat') r.categoryId = e.target.value;
       if (k === 'other') r.other = e.target.value;
-      const sc = body.scrollTop; render(); $('#sheet .sheet-body').scrollTop = sc;
+      const sc = $('#sheet .sheet-body').scrollTop; render(); $('#sheet .sheet-body').scrollTop = sc;
     };
     body.querySelector('#go').onclick = () => doImport(rows.filter(r => r.on));
   }
-  function rowHtml(r, i) {
+  function rowHtml(r, i, multi) {
     const cls = r.type === 'income' ? 'inc' : r.type === 'transfer' ? 'xfer' : 'exp';
     const d = r.dup?.txnId && M.get(S, 'transactions', r.dup.txnId);
-    const dupText = r.dup ? (d ? `Already in MoneyBook: ${d.date} · ${esc(d.note || txLabel(d))} · ${fmt(d.amount)}` : 'Same entry appears in another file you picked') : '';
+    let dupText = '';
+    if (r.dup?.reason === 'existing') dupText = `⚠️ Duplicate — already in MoneyBook: ${d.date} · ${esc(d.note || txLabel(d))} · ${fmt(d.amount)}`;
+    else if (r.dup?.reason === 'batch') dupText = r.type === 'transfer' ? `⚠️ Duplicate — other side of the same transfer (“${esc(r.dup.twin || '')}”) in another file` : `⚠️ Duplicate — same entry is in another file you picked (“${esc(r.dup.twin || '')}”)`;
+    else if (r.dup?.reason === 'scheduled') dupText = `🔁 Updates the scheduled “${esc(d.note || '')}” on ${d.date}${Math.abs(d.amount - r.amount) > 0.004 ? ` (${fmt(d.amount)} → ${fmt(r.amount)})` : ''} instead of adding a copy`;
+    else if (r.pending) dupText = '⏳ Pending at the bank — import it after it posts';
     const typeSel = `<select data-k="type">${['expense', 'income', 'transfer'].map(t => `<option value="${t}" ${t === r.type ? 'selected' : ''}>${cap(t)}</option>`).join('')}</select>`;
     const second = r.type === 'transfer'
-      ? `<select data-k="other"><option value="">${r.dir === 'in' ? 'Paid from…' : 'Paid to…'}</option>${M.live(S, 'accounts').filter(a => a.id !== st.accountId && !a.mortgageAccount).map(a => `<option value="${a.id}" ${a.id === r.other ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`
+      ? `<select data-k="other"><option value="">${r.dir === 'in' ? 'Paid from…' : 'Paid to…'}</option>${M.live(S, 'accounts').filter(a => a.id !== r.accountId && !a.mortgageAccount).map(a => `<option value="${a.id}" ${a.id === r.other ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`
       : `<select data-k="cat">${categoryOptions(r.type, r.categoryId)}</select>`;
-    return `<div class="imp-row ${r.dup ? 'dup' : ''} ${r.on ? '' : 'off'}" data-i="${i}">
+    return `<div class="imp-row ${r.dup || r.pending ? 'dup' : ''} ${r.on ? '' : 'off'}" data-i="${i}">
       <input type="checkbox" data-k="on" ${r.on ? 'checked' : ''} aria-label="Import this row">
-      <div class="imp-main"><div>${esc(r.desc)}</div><small>${r.date}${r.dir === 'in' ? ' · money in' : ''}</small></div>
+      <div class="imp-main"><div>${esc(r.desc)}</div><small>${r.date}${r.dir === 'in' ? ' · money in' : ''}${multi ? ' · ' + esc(M.accName(S, r.accountId)) : ''}</small></div>
       <b class="${cls}">${fmt(r.amount)}</b>
-      ${r.on ? `<div class="imp-ctl">${typeSel}${second}</div>` : ''}
-      ${r.dup ? `<div class="dupnote">⚠️ Duplicate — ${dupText}</div>` : ''}</div>`;
+      ${r.on && r.dup?.reason !== 'scheduled' ? `<div class="imp-ctl">${typeSel}${second}</div>` : ''}
+      ${dupText ? `<div class="dupnote">${dupText}</div>` : ''}</div>`;
   }
   function doImport(rows) {
-    const noAcc = rows.filter(r => r.type === 'transfer' && !r.other);
+    const noAcc = rows.filter(r => r.dup?.reason !== 'scheduled' && r.type === 'transfer' && !r.other);
     if (noAcc.length) return toast(`Pick the other account for ${noAcc.length} transfer${noAcc.length > 1 ? 's' : ''} (e.g. which bank paid the card)`, 4500);
-    const missing = rows.filter(r => r.type !== 'transfer' && !r.categoryId).length;
-    if (missing && !confirm(`${missing} selected row(s) have no category / account yet. Import them as Uncategorized anyway?`)) return;
-    let n = 0;
+    const missing = rows.filter(r => r.dup?.reason !== 'scheduled' && r.type !== 'transfer' && !r.categoryId).length;
+    if (missing && !confirm(`${missing} selected row(s) have no category yet. Import them as Uncategorized anyway?`)) return;
+    let n = 0, u = 0;
     for (const r of rows) {
+      if (r.dup?.reason === 'scheduled') {           // statement is the truth: correct the auto-posted entry
+        const t = M.get(S, 'transactions', r.dup.txnId); if (!t) continue;
+        Object.assign(t, { amount: r.amount, date: r.date, imported: true }); M.put(S, 'transactions', t); u++; continue;
+      }
       const t = { id: M.uid(), type: r.type, date: r.date, amount: r.amount, note: r.desc, desc: '', imported: true };
       if (r.type === 'transfer') {
-        if (r.dir === 'out') { t.accountId = st.accountId; t.toAccountId = r.other; }
-        else { t.accountId = r.other; t.toAccountId = st.accountId; }
-      } else { t.accountId = st.accountId; t.categoryId = r.categoryId; }
+        if (r.dir === 'out') { t.accountId = r.accountId; t.toAccountId = r.other; } else { t.accountId = r.other; t.toAccountId = r.accountId; }
+        R.learnTransfer(S, r.desc, r.accountId, r.other);
+      } else { t.accountId = r.accountId; t.categoryId = r.categoryId; }
       M.put(S, 'transactions', t); n++;
-      if (t.type === 'expense' && t.categoryId) R.learn(S, r.desc, st.accountId, t.categoryId);
+      if (t.type === 'expense' && t.categoryId) R.learn(S, r.desc, r.accountId, t.categoryId);
     }
-    L.lastImportAccount = st.accountId; saveLocal();
-    closeSheet(); commit(); toast(`Imported ${n} transaction${n === 1 ? '' : 's'}`);
+    // Remember how to recognise these files and keep each card's statement history (for due-date reminders).
+    for (const b of ctx.batches) {
+      const a = M.get(S, 'accounts', b.accountId); if (!a || b.sectionAcc) { if (b.sectionAcc) saveSectionLabels(b); continue; }
+      const nums = I.accountEndings(a);
+      if (b.endings?.length && b.endings.length <= 3 && b.how !== 'number') a.numbers = [...new Set([...nums, ...b.endings])].join(', ');
+      if (b.sig && !(a.importSigs || []).includes(b.sig)) a.importSigs = [...(a.importSigs || []), b.sig];
+      const mt = b.meta;
+      if (mt?.kind === 'card' && mt.statementDate) {
+        upsertCycle(a, { statementDate: mt.statementDate, dueDate: mt.dueDate, balanceDue: mt.balanceDue ?? mt.newBalance, newBalance: mt.newBalance, minPayment: mt.minPayment });
+        if (mt.periodStart) upsertCycle(a, { statementDate: M.addDays(mt.periodStart, -1) });
+      }
+      if (mt?.plans?.length) { const by = new Map((a.plans || []).map(p => [p.start + '|' + p.original, p])); mt.plans.forEach(p => by.set(p.start + '|' + p.original, p)); a.plans = [...by.values()]; }
+      M.put(S, 'accounts', a);
+    }
+    closeSheet(); commit(); toast(`Imported ${n} transaction${n === 1 ? '' : 's'}${u ? `, updated ${u} scheduled` : ''}`);
+  }
+  function saveSectionLabels(b) {
+    for (const [sec, id] of Object.entries(b.sectionAcc)) {
+      const a = M.get(S, 'accounts', id); if (!a) continue;
+      const label = sec.split(/\s+-\s+|\s{2,}/)[0].trim();
+      if (label && !(a.statementLabels || []).includes(label)) { a.statementLabels = [...(a.statementLabels || []), label]; M.put(S, 'accounts', a); }
+    }
   }
   build(); render();
+}
+function upsertCycle(a, c) {
+  const list = (a.cycles || []).filter(x => x.statementDate !== c.statementDate);
+  const old = (a.cycles || []).find(x => x.statementDate === c.statementDate) || {};
+  const merged = { ...old }; Object.entries(c).forEach(([k, v]) => { if (v != null) merged[k] = v; });
+  a.cycles = [...list, merged].sort((x, y) => x.statementDate.localeCompare(y.statementDate)).slice(-24);
+}
+
+// ---------- mortgage documents (statements, annual statements, amortization schedule) ----------
+function mortgageDocImport(docs, standalone = true) {
+  const ms = M.live(S, 'mortgages');
+  const num = docs.map(d => d.doc.number).find(Boolean);
+  let target = ms.find(m => num && m.number === num) || (ms.length === 1 ? ms[0] : null);
+  const body = openSheet('Mortgage documents', `
+    <div class="hint">Found: ${docs.map(d => `<b>${esc({ info: 'balance statement', annual: `${d.doc.year} annual statement`, schedule: 'amortization schedule' }[d.doc.kind])}</b>`).join(', ')}.</div>
+    <label>Apply to<select id="mt">${ms.map(m => `<option value="${m.id}" ${target?.id === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}<option value="">+ New mortgage from these documents</option></select></label>
+    <div class="hint">Balances become checkpoints (your tracked balance is corrected to the lender's figure on that date). The schedule gives exact future interest/principal splits. Rate, payment and frequency are updated from the newest document.</div>
+    <div class="row"><button class="primary" id="go">Apply</button></div>`);
+  body.querySelector('#go').onclick = () => {
+    const id = body.querySelector('#mt').value;
+    let m = id ? M.get(S, 'mortgages', id) : null;
+    if (!m) {
+      const ann = docs.map(d => d.doc).filter(d => d.kind === 'annual').sort((a, b) => a.year - b.year)[0];
+      m = { id: M.uid(), name: 'Home mortgage', lender: '', compounding: 'semiannual', principal: ann?.advances || ann?.opening || 0, startDate: ann ? `${ann.year}-01-01` : today(), rate: 0, frequency: 'monthly', payment: 0 };
+      ensureMortgageAccount(m);
+    }
+    applyMortgageDocs(m, docs.map(d => d.doc));
+    M.put(S, 'mortgages', m); M.materialize(S); commit();
+    toast('Mortgage updated from lender documents'); mortgageDetail(m);
+  };
+}
+function ensureMortgageAccount(m) {
+  if (m.accountId && M.get(S, 'accounts', m.accountId)) return;
+  const g = M.live(S, 'groups').find(g => g.kind === 'liability') || M.put(S, 'groups', { id: M.uid(), name: 'Loan', kind: 'liability', order: 99 });
+  m.accountId = M.put(S, 'accounts', { id: 'acct_' + m.id, groupId: g.id, name: m.name, opening: 0, includeInTotals: true, mortgageAccount: true }).id;
+}
+function addCheckpoint(m, date, balance, note) {
+  if (!date || !(balance >= 0)) return;
+  m.checkpoints = [...(m.checkpoints || []).filter(c => c.date !== date), { date, balance, note }].sort((a, b) => a.date.localeCompare(b.date));
+}
+function applyMortgageDocs(m, docs) {
+  docs = [...docs].sort((a, b) => (a.asOf || a.periodEnd || '').localeCompare(b.asOf || b.periodEnd || ''));
+  for (const d of docs) {
+    if (d.number) m.number = d.number;
+    if (d.kind === 'annual') {
+      addCheckpoint(m, d.periodEnd, d.closing, `${d.year} annual statement`);
+      m.annual = { ...(m.annual || {}), [d.year]: { interest: d.interestPaid, principal: d.principalPaid, paid: d.totalPaid, closing: d.closing } };
+      if (d.frequency || d.rate) m.rateChanges = [...(m.rateChanges || []).filter(c => c.date !== `${d.year}-01-01`), { date: `${d.year}-01-01`, rate: d.rate, frequency: d.frequency, payment: d.payment }];
+      if (d.maturity) m.termEnd = d.maturity;
+      if (d.advances > 0 && !(d.opening > 0) && (!m.principal || m.startDate >= `${d.year}-01-01`)) m.principal = d.advances;
+    }
+    if (d.kind === 'info') {
+      addCheckpoint(m, d.asOf, d.balance, 'Lender balance statement');
+      Object.assign(m, { payment: d.payment || m.payment, rate: d.rate || m.rate, frequency: d.frequency || m.frequency, compounding: d.rateType === 'variable' ? 'monthly' : 'semiannual' });
+      if (d.amortYears) m.amortYears = Math.round(d.amortYears * 10) / 10;
+      if (d.finalPayment) m.termEnd = d.finalPayment;
+      if (d.nextDue) m.nextDue = d.nextDue;
+    }
+    if (d.kind === 'schedule') {
+      addCheckpoint(m, d.asOf, d.balance, 'Amortization schedule');
+      m.schedule = d.schedule; m.payment = d.payment || m.payment; m.frequency = d.frequency || m.frequency;
+      if (d.schedule?.[0]?.date) m.nextDue = d.schedule[0].date;
+    }
+  }
+  syncMortgageRepeat(m);
+}
+// Keep the repeat payment in step with the lender's next due date and amount.
+function syncMortgageRepeat(m) {
+  const rec = M.live(S, 'recurring').find(r => r.template?.type === 'mortgage' && r.template.mortgageId === m.id);
+  if (rec && m.nextDue && m.nextDue > today()) {
+    const freq = { monthly: 'monthly', biweekly: 'biweekly', accelBiweekly: 'biweekly', weekly: 'weekly', semimonthly: 'monthly' }[m.frequency] || rec.freq;
+    if (!M.occurrences(rec, m.nextDue, m.nextDue).length || +rec.template.amount !== +m.payment || rec.freq !== freq) {
+      Object.assign(rec, { startDate: m.nextDue, freq, materializedThrough: today() }); rec.template.amount = m.payment; M.put(S, 'recurring', rec);
+    }
+  }
+}
+
+// Turn past lender-payment expenses (and their repeat) into mortgage payments split into interest + principal.
+function linkMortgagePayments(m) {
+  const words = (m.lender || m.name || '').toLowerCase().split(/[^a-z]+/).filter(w => w.length > 3 && !/mortgage|home/.test(w));
+  const isMortCat = id => /mortgage/i.test(M.catLabel(S, id));
+  const matches = t => {
+    const txt = `${t.note || ''} ${t.desc || ''}`.toLowerCase();
+    return (words.some(w => txt.includes(w)) || isMortCat(t.categoryId) || (t.type === 'transfer' && /mortgage/i.test(M.accName(S, t.toAccountId))));
+  };
+  const cands = M.live(S, 'transactions').filter(t => t.type !== 'mortgage' && t.type !== 'income' && t.date >= m.startDate && t.date <= today() && +t.amount >= 50 && matches(t))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const counts = {}; cands.forEach(t => (counts[t.amount] = (counts[t.amount] || 0) + 1));
+  const regular = new Set(Object.entries(counts).filter(([, n]) => n >= 2).map(([a]) => +a));
+  (m.rateChanges || []).forEach(c => c.payment && regular.add(+c.payment)); if (m.payment) regular.add(+m.payment);
+  const rows = cands.map(t => ({ t, on: true, pre: !regular.has(+t.amount) && ![...regular].some(r => Math.abs(r - t.amount) < 1) }));
+  const recs = M.live(S, 'recurring').filter(r => r.template?.type !== 'mortgage' && matches(r.template || {}));
+  const body = openSheet('Link past mortgage payments', `
+    <div class="hint">These look like payments to ${esc(m.lender || m.name)}. Linked payments are split into interest and principal automatically, reduce the mortgage balance, and get a note like “🏡 Principal $818.75 · Interest $1,181.25 · Balance $543,166.99”. Amounts that aren't a regular payment are marked ⚡ prepayment (100% principal) — untick if wrong.</div>
+    ${recs.length ? `<div class="hint">Repeat payment${recs.length > 1 ? 's' : ''} to convert: ${recs.map(r => `<b>${esc(r.template.note || '')}</b> ${fmt(r.template.amount)} ${M.FREQS[r.freq] || ''}`).join(', ')}</div>` : ''}
+    <div class="list">${rows.map((r, i) => `<div class="imp-row" data-i="${i}"><input type="checkbox" data-k="on" checked>
+      <div class="imp-main"><div>${esc(r.t.note || txLabel(r.t))}</div><small>${r.t.date} · ${esc(M.accName(S, r.t.accountId))}</small></div><b class="exp">${fmt(r.t.amount)}</b>
+      <label class="check dupnote" style="color:var(--ink)"><input type="checkbox" data-k="pre" ${r.pre ? 'checked' : ''}> ⚡ Prepayment</label></div>`).join('') || '<div class="empty">No matching payments found. Check the lender name in Edit.</div>'}</div>
+    <div class="sticky-bar"><button class="primary" id="go" style="width:100%">Link ${rows.length} payment${rows.length === 1 ? '' : 's'}${recs.length ? ` + ${recs.length} repeat` : ''}</button></div>`);
+  body.querySelector('.list').onchange = e => { const r = rows[+e.target.closest('[data-i]').dataset.i]; r[e.target.dataset.k] = e.target.checked; };
+  body.querySelector('#go').onclick = () => {
+    const cats = {};
+    for (const r of rows.filter(r => r.on)) {
+      const t = r.t; if (t.categoryId) cats[t.categoryId] = (cats[t.categoryId] || 0) + 1;
+      Object.assign(t, { type: 'mortgage', mortgageId: m.id, prepayment: r.pre || undefined }); delete t.toAccountId;
+      M.put(S, 'transactions', t);
+    }
+    for (const r of recs) { r.template = { ...r.template, type: 'mortgage', mortgageId: m.id }; delete r.template.toAccountId; M.put(S, 'recurring', r); }
+    const top = Object.entries(cats).sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (top && !m.categoryId) m.categoryId = M.topCatId(S, top);
+    if (m.categoryId) {
+      const sub = name => M.live(S, 'categories').find(c => c.parentId === m.categoryId && c.name.toLowerCase() === name.toLowerCase())
+        || M.put(S, 'categories', { id: M.uid(), type: 'expense', name, emoji: '', parentId: m.categoryId, order: S.categories.length });
+      m.interestCategoryId = m.interestCategoryId || sub('Interest').id; m.principalCategoryId = m.principalCategoryId || sub('Principal').id;
+    }
+    M.put(S, 'mortgages', m); syncMortgageRepeat(m); M.refreshMortgageNotes(S); commit();
+    toast(`Linked ${rows.filter(r => r.on).length} payments`); mortgageDetail(m);
+  };
+}
+
+// ---------- private setup file (made from your statements; never stored on GitHub) ----------
+function applySetup(data) {
+  const accs = M.live(S, 'accounts');
+  const find = e => {
+    const names = [e.match?.name, ...(e.match?.aliases || [])].filter(Boolean).map(n => n.toLowerCase());
+    return accs.find(a => names.includes(a.name.toLowerCase())) || accs.find(a => names.some(n => a.name.toLowerCase().includes(n) || n.includes(a.name.toLowerCase())));
+  };
+  const entries = (data.accounts || []).map(e => ({ e, acc: find(e) }));
+  const body = openSheet('Apply setup file', `
+    <div class="hint">${esc(data.title || 'Setup from your statements')}. Pick the matching account for each item — anything set to “skip” is left alone.</div>
+    <div class="list">${entries.map((x, i) => `<div class="li" style="display:block"><b>${esc(x.e.label || x.e.match?.name)}</b><small>${esc(x.e.summary || '')}</small>
+      <select data-i="${i}" style="margin-top:6px"><option value="">— skip —</option>${accountOptions(x.acc?.id || '').replace(/<option value="">—<\/option>/, '')}</select></div>`).join('')}</div>
+    ${(data.mortgages || []).length ? `<div class="hint">Mortgage: <b>${esc(data.mortgages.map(m => m.name).join(', '))}</b> with ${data.mortgages[0].checkpoints?.length || 0} statement balances and ${data.mortgages[0].schedule?.length || 0} scheduled payments. After applying, use “Link past payments” on the mortgage.</div>` : ''}
+    <div class="row"><button class="primary" id="go">Apply</button></div>`);
+  if (!entries.every(x => x.acc)) entries.forEach((x, i) => { const sel = body.querySelector(`select[data-i="${i}"]`); if (!x.acc) sel.value = ''; else sel.value = x.acc.id; });
+  body.querySelector('#go').onclick = () => {
+    let n = 0;
+    entries.forEach((x, i) => {
+      const id = body.querySelector(`select[data-i="${i}"]`).value; const a = id && M.get(S, 'accounts', id); if (!a) return;
+      const set = x.e.set || {};
+      if (set.numbers) a.numbers = [...new Set([...I.accountEndings(a), ...set.numbers.split(/[,\s]+/).filter(Boolean)])].join(', ');
+      ['dueDays', 'statementDay'].forEach(k => set[k] != null && (a[k] = set[k]));
+      if (set.importSigs) a.importSigs = [...new Set([...(a.importSigs || []), ...set.importSigs])];
+      if (set.statementLabels) a.statementLabels = [...new Set([...(a.statementLabels || []), ...set.statementLabels])];
+      (x.e.cycles || []).forEach(c => upsertCycle(a, c));
+      if (x.e.plans) { const by = new Map((a.plans || []).map(p => [p.start + '|' + p.original, p])); x.e.plans.forEach(p => by.set(p.start + '|' + p.original, p)); a.plans = [...by.values()]; }
+      M.put(S, 'accounts', a); n++;
+    });
+    for (const dm of data.mortgages || []) {
+      let m = M.live(S, 'mortgages').find(x => (dm.number && x.number === dm.number) || x.id === dm.id);
+      const { checkpoints = [], rateChanges = [], annual = {}, ...fields } = dm;
+      if (!m) { m = { ...fields }; ensureMortgageAccount(m); }
+      else Object.assign(m, Object.fromEntries(Object.entries(fields).filter(([k]) => !['id', 'accountId'].includes(k))));
+      checkpoints.forEach(c => addCheckpoint(m, c.date, c.balance, c.note));
+      m.rateChanges = [...(m.rateChanges || []).filter(c => !rateChanges.some(r => r.date === c.date)), ...rateChanges];
+      m.annual = { ...(m.annual || {}), ...annual };
+      const acc = M.get(S, 'accounts', m.accountId); if (acc) { acc.name = m.name; M.put(S, 'accounts', acc); }
+      M.put(S, 'mortgages', m);
+    }
+    closeSheet(); commit(); toast(`Setup applied to ${n} account${n === 1 ? '' : 's'}${(data.mortgages || []).length ? ' + mortgage' : ''}`);
+    if ((data.mortgages || []).length) { tab = 'more'; render(); listMortgages(); }
+  };
+}
+
+// ---------- needs attention: card payments, bills to add, suggestions ----------
+function attentionHtml() {
+  const rd = S.settings.remindDays ?? 3;
+  const cards = X.cardStatuses(S).filter(c => c.status === 'due' || c.status === 'overdue');
+  const bills = X.billReminders(S, today(), rd);
+  const nSug = suggestionCount();
+  if (!cards.length && !bills.length && !nSug) return '';
+  const line = (icon, main, sub, btns, warn) => `<div class="li"><span style="font-size:20px">${icon}</span><div class="grow"><span class="${warn ? 'exp' : ''}">${main}</span><small>${sub}</small></div>${btns}</div>`;
+  return `<div class="section-title">Needs attention</div><div class="list">` +
+    cards.map(c => line('💳', `${esc(c.account.name)} — ${fmt(c.remaining)} ${c.status === 'overdue' ? 'was due' : 'due'} ${c.dueDate.slice(5)}`,
+      `${c.status === 'overdue' ? 'Overdue — not showing as paid' : `${c.daysLeft} day${c.daysLeft === 1 ? '' : 's'} left · not paid yet`}${c.paid ? ` · ${fmt(c.paid)} paid so far` : ''}${c.minPayment ? ` · min ${fmt(c.minPayment)}` : ''}${c.predicted ? ` · estimated (statement ~${c.statementDate.slice(5)})` : ''}`,
+      `<button class="secondary" data-act="payCard" data-id="${c.account.id}" data-amt="${c.remaining}" style="padding:6px 10px">Pay</button>`, c.status === 'overdue' || c.daysLeft <= rd)).join('') +
+    bills.map(b => line('🔌', `${esc(b.recurring.template.note || 'Bill')} — about ${fmt(b.recurring.template.amount)}`,
+      `${b.overdue ? `Usually around ${b.date.slice(5)} — not added yet` : `Due ${b.date.slice(5)} · reminder`}`,
+      `<button class="secondary" data-act="addBill" data-id="${b.recurring.id}" data-date="${b.date}" style="padding:6px 10px">Add</button><button class="secondary" data-act="skipBill" data-id="${b.recurring.id}" data-date="${b.date}" style="padding:6px 8px;margin-left:4px">Skip</button>`, b.overdue)).join('') +
+    (nSug ? line('✨', `${nSug} suggestion${nSug === 1 ? '' : 's'} for your scheduled payments`, 'Duplicates to remove and regular bills to schedule', '<span class="chev">›</span>').replace('<div class="li">', '<div class="li" data-act="suggestions">') : '') +
+    '</div>';
+}
+let sugCache = { at: 0, n: 0 };
+function suggestionCount() {
+  if (Date.now() - sugCache.at < 4000) return sugCache.n;
+  sugCache = { at: Date.now(), n: X.redundantSchedules(S).length + X.predictRecurring(S).length };
+  return sugCache.n;
+}
+function suggestions() {
+  const red = X.redundantSchedules(S), pred = X.predictRecurring(S);
+  const kindTxt = { utility: '🔔 Reminder only — amount varies, you add it', phone: 'Auto-posts (auto-debit)', other: 'Auto-posts on the due date' };
+  const body = openSheet('Smart suggestions', `
+    <div class="section-title">Duplicate or outdated scheduled payments (${red.length})</div>
+    <div class="list">${red.map((r, i) => `<div class="li"><div class="grow">${esc(r.drop?.template?.note || r.dropTxn?.note || '')} ${fmt(r.drop?.template?.amount ?? r.dropTxn?.amount)}<small>${esc(r.why)}</small></div><button class="secondary" data-rm="${i}" style="padding:6px 10px">Remove</button></div>`).join('') || '<div class="empty">Nothing redundant 👍</div>'}</div>
+    ${red.length > 1 ? '<div class="row"><button class="secondary" id="rmAll">Remove all</button></div>' : ''}
+    <div class="section-title">Regular charges not scheduled yet (${pred.length})</div>
+    <div class="list">${pred.map((p, i) => `<div class="li"><div class="grow">${esc(p.note)} — ${p.variable ? 'about ' : ''}${fmt(p.amount)}<small>${M.FREQS[p.freq]} · next ~${p.nextDate} · seen ${p.count}× · ${esc(M.accName(S, p.accountId))}<br>${kindTxt[p.kind]}</small></div><button class="secondary" data-add="${i}" style="padding:6px 10px">Add</button></div>`).join('') || '<div class="empty">All regular charges are scheduled 👍</div>'}</div>
+    ${pred.length > 1 ? '<div class="row"><button class="primary" id="addAll">Add all</button></div>' : ''}
+    <div class="hint pad">Phone and internet are scheduled to post automatically (they're auto-debit) with no reminder. Utilities become reminders that appear under “Needs attention” until you add the actual bill.</div>`);
+  const drop = r => { if (r.drop) M.remove(S, 'recurring', r.drop.id); if (r.dropTxn) M.remove(S, 'transactions', r.dropTxn.id); };
+  const add = p => M.put(S, 'recurring', { id: M.uid(), freq: p.freq, interval: 1, startDate: p.nextDate, materializedThrough: today(), mode: p.kind === 'utility' ? 'remind' : 'auto', predicted: true,
+    template: { type: 'expense', amount: p.amount, accountId: p.accountId, categoryId: p.categoryId, note: p.note } });
+  body.querySelectorAll('[data-rm]').forEach(b => (b.onclick = () => { drop(red[+b.dataset.rm]); sugCache.at = 0; commit(); suggestions(); }));
+  body.querySelectorAll('[data-add]').forEach(b => (b.onclick = () => { add(pred[+b.dataset.add]); sugCache.at = 0; commit(); suggestions(); }));
+  body.querySelector('#rmAll')?.addEventListener('click', () => { red.forEach(drop); sugCache.at = 0; commit(); suggestions(); });
+  body.querySelector('#addAll')?.addEventListener('click', () => { pred.forEach(add); sugCache.at = 0; commit(); suggestions(); toast(`Scheduled ${pred.length} payments`); });
 }
 
 // ---------- duplicate clean-up for existing data ----------
@@ -919,7 +1239,10 @@ const actions = {
   editGroup: () => editGroup(),
   openMortgage: el => mortgageDetail(M.get(S, 'mortgages', el.dataset.id)),
   mortgages: listMortgages, recurring: listRecurring, categories: () => listCategories(), manageAccounts,
-  receiptRules, syncScreen, settings, importStatement, dupScan,
+  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions,
+  payCard: el => { const id = el.dataset.id; editTxn(null, { type: 'transfer', amount: +el.dataset.amt || '', accountId: I.usualPayer(S, id) || defaultAccount(), toAccountId: id, note: 'Card payment' }); },
+  addBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) editTxn(null, { ...r.template, date: el.dataset.date <= today() ? el.dataset.date : today() }); },
+  skipBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) { r.dismissed = [...(r.dismissed || []), el.dataset.date].slice(-12); M.put(S, 'recurring', r); commit(); toast('Skipped this time'); } },
   closeSheet,
   sync: () => (L.clientId ? doSync(true).catch(() => {}) : syncScreen())
 };
