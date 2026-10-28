@@ -1,4 +1,4 @@
-/// Tiny IndexedDB key-value store holding the whole app state on this device.
+// Tiny IndexedDB key-value store holding the whole app state on this device.
 const DB = 'moneybook', STORE = 'kv', KEY = 'state';
 let dbp;
 function open() {
