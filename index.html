@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MoneyBook</title>
+<meta name="description" content="Personal money tracker with mortgage tracking, receipt scanning and Google Drive sync.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#e8685a">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header id="top">
+  <h1 id="title">MoneyBook</h1>
+  <button id="syncBtn" class="iconbtn" data-act="sync" title="Sync with Google Drive" aria-label="Sync">⟳</button>
+</header>
+<main id="view"></main>
+<button id="fab" data-act="addTxn" aria-label="Add transaction">+</button>
+<nav id="tabs">
+  <button data-act="tab" data-tab="trans"><i>📒</i><span>Trans.</span></button>
+  <button data-act="tab" data-tab="calendar"><i>📅</i><span>Calendar</span></button>
+  <button data-act="tab" data-tab="stats"><i>📊</i><span>Stats</span></button>
+  <button data-act="tab" data-tab="accounts"><i>🏦</i><span>Accounts</span></button>
+  <button data-act="tab" data-tab="more"><i>⋯</i><span>More</span></button>
+</nav>
+<div id="sheet" class="hidden" role="dialog" aria-modal="true">
+  <div class="sheet-backdrop" data-act="closeSheet"></div>
+  <div class="sheet-body"></div>
+</div>
+<div id="toast" role="status"></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
