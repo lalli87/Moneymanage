@@ -5,6 +5,7 @@ import * as R from './receipt.js';
 import * as I from './importer.js';
 import * as X from './insights.js';
 import * as Lk from './lock.js';
+import * as Cx from './crypto.js';
 
 // ---------- globals ----------
 let S;                                   // synced app state
@@ -49,6 +50,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyThe
 async function init() {
   applyTheme();
   showLock();
+  try { vault = await DB.getKV('vault'); } catch {}
   S = M.migrate((await DB.load()) || M.emptyState());
   if (M.materialize(S)) await DB.save(S);
   render();
@@ -62,17 +64,56 @@ async function init() {
 }
 
 // ---------- sync ----------
+// ---------- end-to-end encryption of what goes to Drive ----------
+let vault = null;                                   // { salt, key: non-exportable CryptoKey } for this device
+const codec = {
+  encode: async st => (vault ? Cx.encryptJSON(st, vault.key, vault.salt) : st),
+  decode: async r => {
+    if (!Cx.isEncrypted(r)) return r;
+    if (vault && vault.salt === r.salt) { try { return await Cx.decryptJSON(r, vault.key); } catch {} }
+    throw Object.assign(new Error('Enter your encryption passphrase to sync'), { needPass: r });
+  }
+};
+async function setVault(v) { vault = v; if (v) await DB.putKV('vault', v); else await DB.delKV('vault'); }
+// Ask for the passphrase of an encrypted file; resolves with { data, key } or null if cancelled.
+function askPassphrase(env, why = 'Your MoneyBook data in Google Drive is encrypted.') {
+  return new Promise(resolve => {
+    const body = openSheet('Encryption passphrase', `<div class="hint">${esc(why)} Enter the passphrase from your password manager. It's checked on this device only.</div>
+      <form id="f"><label>Passphrase<input name="p" type="password" autocomplete="current-password" required></label>
+      <div class="hint" id="m"></div><div class="row"><button class="primary">Unlock</button><button type="button" class="secondary" id="c">Cancel</button></div></form>`);
+    const f = body.querySelector('#f');
+    body.querySelector('#c').onclick = () => { closeSheet(); resolve(null); };
+    f.onsubmit = async e => {
+      e.preventDefault(); body.querySelector('#m').textContent = 'Checking…';
+      try {
+        const key = await Cx.deriveKey(f.p.value, env.salt, env.iter || Cx.ITER);
+        const data = await Cx.decryptJSON(env, key);
+        closeSheet(); resolve({ data, key });
+      } catch { body.querySelector('#m').textContent = '❌ Wrong passphrase'; }
+    };
+    setTimeout(() => f.p.focus(), 100);
+  });
+}
+
 async function doSync(interactive = true) {
   const btn = $('#syncBtn'); btn.classList.add('spin');
   try {
-    S = M.migrate(await Sync.sync(S, L.clientId, interactive));
+    S = M.migrate(await Sync.sync(S, L.clientId, interactive, codec));
     M.materialize(S);
     await DB.save(S);
     L.lastSync = new Date().toISOString(); saveLocal();
     render();
-    Sync.weeklyBackup(S, L.clientId).then(n => n && interactive && toast('Weekly backup saved to Drive')).catch(() => {});
-    if (interactive) toast('Synced with Google Drive ✓');
-  } catch (e) { if (interactive) toast(e.message, 4500); throw e; }
+    Sync.weeklyBackup(S, L.clientId, { codec }).then(n => n && interactive && toast('Weekly backup saved to Drive')).catch(() => {});
+    if (interactive) toast(vault ? 'Synced (end-to-end encrypted) ✓' : 'Synced with Google Drive ✓');
+  } catch (e) {
+    if (e.needPass && interactive) {
+      btn.classList.remove('spin');
+      const r = await askPassphrase(e.needPass);
+      if (r) { await setVault({ salt: e.needPass.salt, key: r.key }); return doSync(true); }
+      return;
+    }
+    if (interactive) toast(e.message, 4500); throw e;
+  }
   finally { btn.classList.remove('spin'); }
 }
 
@@ -737,6 +778,9 @@ function syncScreen() {
     <div class="hint">One-time setup — see the README. Authorized JavaScript origin must be <code>${esc(origin)}</code></div>
     <div class="row"><button class="primary">Save & sync now</button></div></form>
     <div class="hint">${L.lastSync ? 'Last sync: ' + new Date(L.lastSync).toLocaleString('en-CA') : 'Not synced yet on this device.'}</div>
+    <div class="section-title">End-to-end encryption</div>
+    <div class="pad hint" style="padding-top:0">${vault ? '🔐 <b>On.</b> Your sync file and new backups are encrypted on this device before upload — Google, or anyone who gets into your Google account, sees only scrambled data.' : '<b>Off.</b> Turn on to encrypt your sync file and backups with a passphrase only you know.'}</div>
+    <div class="btnrow" style="padding:0">${vault ? '<button class="secondary" id="encChg">Change passphrase</button><button class="secondary" id="encOff">Turn off</button>' : '<button class="primary" id="encOn">Turn on encryption</button>'}</div>
     <div class="section-title">Backup</div>
     <div class="btnrow" style="padding:0"><button class="secondary" id="exp">Export backup (.json)</button><button class="secondary" id="imp">Import backup</button><button class="secondary" id="csv">Export CSV</button></div>
     <input type="file" id="impFile" accept=".json,application/json" hidden>
@@ -760,7 +804,8 @@ function syncScreen() {
   body.querySelector('#impFile').onchange = async e => {
     const file = e.target.files[0]; if (!file) return;
     try {
-      const raw = JSON.parse(await file.text());
+      let raw = JSON.parse(await file.text());
+      if (Cx.isEncrypted(raw)) { const r = await askPassphrase(raw, 'This backup file is encrypted.'); if (!r) return; raw = r.data; }
       if (raw.type === 'moneybook-setup') return applySetup(raw);
       const data = M.migrate(raw);
       const n = M.live(data, 'transactions').length;
@@ -777,6 +822,42 @@ function syncScreen() {
     } catch (err) { toast('Not a valid backup: ' + err.message); }
   };
   body.querySelector('#out').onclick = () => { Sync.signOut(); toast('Signed out'); };
+  body.querySelector('#encOn')?.addEventListener('click', () => encryptionSetup(false));
+  body.querySelector('#encChg')?.addEventListener('click', () => encryptionSetup(true));
+  body.querySelector('#encOff')?.addEventListener('click', async () => {
+    if (!confirm('Turn off encryption? Your Drive sync file will be stored unencrypted again. Existing encrypted backups stay encrypted.')) return;
+    await setVault(null); try { await doSync(true); } catch {} syncScreen();
+  });
+}
+function encryptionSetup(change) {
+  if (!L.clientId) return toast('Set up Google Drive sync first');
+  const body = openSheet(change ? 'Change passphrase' : 'Turn on encryption', `
+    <div class="hint">Choose a long passphrase (at least 12 characters — a few random words works well) and save it in your password manager <b>before</b> continuing.<br><br>
+    ⚠️ If you forget it and lose your devices, the Drive copy and encrypted backups <b>cannot be recovered by anyone</b>. Your data on this device is not affected.</div>
+    <form id="f"><label>Passphrase<input name="p1" type="password" autocomplete="new-password" minlength="12" required></label>
+    <label>Repeat passphrase<input name="p2" type="password" autocomplete="new-password" required></label>
+    <label class="check"><input type="checkbox" name="saved" required> I've saved it in my password manager</label>
+    ${!change ? '<label class="check"><input type="checkbox" name="wipe" checked> Delete my older unencrypted backups from Drive</label>' : ''}
+    <div class="hint" id="m"></div><div class="row"><button class="primary">${change ? 'Change & re-encrypt' : 'Encrypt my Drive data'}</button></div></form>
+    <div class="hint">Other devices will ask for the passphrase once at their next sync.</div>`);
+  const f = body.querySelector('#f');
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const p = f.p1.value; if (p.length < 12) return toast('Use at least 12 characters'); if (p !== f.p2.value) return toast("Passphrases don't match");
+    const m = body.querySelector('#m'); m.textContent = 'Encrypting… (a few seconds)';
+    try {
+      const old = (!change && f.wipe?.checked) ? await Sync.listBackups(L.clientId, true) : [];
+      const prev = vault, salt = Cx.newSalt(), nv = { salt, key: await Cx.deriveKey(p, salt) };
+      // Read Drive with the current key, write it back with the new one.
+      const mixed = { decode: async r => (Cx.isEncrypted(r) && prev && prev.salt === r.salt ? Cx.decryptJSON(r, prev.key) : codec.decode(r)),
+                      encode: async st => Cx.encryptJSON(st, nv.key, nv.salt) };
+      S = M.migrate(await Sync.sync(S, L.clientId, true, mixed)); M.materialize(S); await DB.save(S);
+      await setVault(nv); render();
+      await Sync.weeklyBackup(S, L.clientId, { force: true, codec });
+      for (const b of old) await Sync.deleteBackup(b.id, L.clientId);
+      closeSheet(); toast(change ? 'Passphrase changed — Drive data re-encrypted 🔐' : 'Encryption on — Drive data is now encrypted 🔐', 4000);
+    } catch (err) { m.textContent = 'Failed: ' + err.message; }
+  };
 }
 function download(name, text, type) {
   const a = document.createElement('a');
@@ -1402,7 +1483,7 @@ function replaceAll(data, n) {
   toast(`Replaced — ${n ?? M.live(data, 'transactions').length} transactions restored`);
 }
 async function backupsScreen() {
-  const body = openSheet('Drive backups', `<div class="hint">A dated copy of everything is saved in your Google Drive app folder once a week when you sync (the newest 8 are kept). Restore one if something goes wrong.</div>
+  const body = openSheet('Drive backups', `<div class="hint">${vault ? '🔐 New backups are end-to-end encrypted. ' : ''}A dated copy of everything is saved in your Google Drive app folder once a week when you sync (the newest 8 are kept). Restore one if something goes wrong.</div>
     <div class="list" id="bl"><div class="empty">Loading…</div></div>
     <div class="row"><button class="primary" id="now">Back up now</button></div>`);
   const load = async () => {
@@ -1411,11 +1492,18 @@ async function backupsScreen() {
       body.querySelector('#bl').innerHTML = files.map(f => `<div class="li"><div class="grow">${esc(f.name.replace('moneybook-backup-', '').replace('.json', ''))}<small>${new Date(f.modifiedTime).toLocaleString('en-CA')} · ${Math.round((+f.size || 0) / 1024)} KB</small></div><button class="secondary" data-id="${f.id}" style="padding:6px 10px">Restore</button></div>`).join('') || '<div class="empty">No backups yet.</div>';
       body.querySelectorAll('[data-id]').forEach(b => (b.onclick = async () => {
         if (!confirm('Replace ALL current data with this backup? Your current data is replaced on every synced device.')) return;
-        try { const d = M.migrate(await Sync.downloadBackup(b.dataset.id, L.clientId)); replaceAll(d); } catch (e) { toast(e.message, 4500); }
+        try {
+          let raw = await Sync.downloadBackup(b.dataset.id, L.clientId);
+          if (Cx.isEncrypted(raw)) {
+            if (vault && vault.salt === raw.salt) raw = await Cx.decryptJSON(raw, vault.key);
+            else { const r = await askPassphrase(raw, 'This backup is encrypted (maybe with an older passphrase).'); if (!r) return; raw = r.data; }
+          }
+          replaceAll(M.migrate(raw));
+        } catch (e) { toast(e.message, 4500); }
       }));
     } catch (e) { body.querySelector('#bl').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
-  body.querySelector('#now').onclick = async () => { try { await Sync.weeklyBackup(S, L.clientId, { force: true }); toast('Backup saved to Drive'); load(); } catch (e) { toast(e.message, 4500); } };
+  body.querySelector('#now').onclick = async () => { try { await Sync.weeklyBackup(S, L.clientId, { force: true, codec }); toast(vault ? 'Encrypted backup saved to Drive' : 'Backup saved to Drive'); load(); } catch (e) { toast(e.message, 4500); } };
   if (!L.clientId) return (body.querySelector('#bl').innerHTML = '<div class="empty">Set up Google Drive sync first.</div>');
   load();
 }

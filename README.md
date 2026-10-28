@@ -118,3 +118,7 @@ This repository contains only the app's code. Your data lives on your devices an
 - **Rental & business reports** (More): set a Purpose on accounts, categories, the mortgage or single transactions, choosing Rental, Shared home cost (counted at your rental %), or Business. Reports give tax-year totals by category. Only the interest part of mortgage payments is counted. Business reports also include an HST summary from the HST amounts you enter, and every report can be exported as CSV.
 - **App lock** (More › App lock): a PIN plus optional fingerprint/face unlock on each device. The PIN is stored only as a salted hash.
 - **Drive backups** (More › Drive backups): a dated copy is saved weekly during sync and the newest 8 are kept. You can restore any of them.
+- **End-to-end encryption** (More › Google Drive sync & backup): turns on passphrase encryption for the Drive sync file and backups. Encryption uses AES-256-GCM, with the key made from your passphrase on the device (PBKDF2-SHA256, 600,000 rounds).
+  - Google, or anyone who gets into your Google account, sees only ciphertext.
+  - Each device asks for the passphrase once and keeps a non-exportable key.
+  - The passphrase is never stored or uploaded. If you lose it, the Drive copies can't be recovered.

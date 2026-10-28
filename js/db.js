@@ -25,3 +25,16 @@ export async function save(state) {
     tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
   });
 }
+// Generic small values (e.g. this device's non-exportable encryption key).
+export async function getKV(k) {
+  const db = await open();
+  return new Promise((res, rej) => { const q = db.transaction(STORE).objectStore(STORE).get(k); q.onsuccess = () => res(q.result ?? null); q.onerror = () => rej(q.error); });
+}
+export async function putKV(k, v) {
+  const db = await open();
+  return new Promise((res, rej) => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).put(v, k); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
+}
+export async function delKV(k) {
+  const db = await open();
+  return new Promise((res, rej) => { const tx = db.transaction(STORE, 'readwrite'); tx.objectStore(STORE).delete(k); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); });
+}

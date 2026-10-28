@@ -65,15 +65,17 @@ async function upload(id, data) {
   return (await r.json()).id;
 }
 // Pull → merge → push. Returns the merged state.
-export async function sync(state, clientId, interactive) {
+// codec.encode / codec.decode turn the state into what is stored in Drive and back (end-to-end encryption).
+const PLAIN = { encode: async s => s, decode: async r => r };
+export async function sync(state, clientId, interactive, codec = PLAIN) {
   await getToken(clientId, interactive);
   const f = await findFile();
   let merged = state;
   if (f) {
     const remote = await (await api(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`)).json();
-    merged = merge(state, remote);
+    merged = merge(state, await codec.decode(remote));
   }
-  await upload(f?.id, merged);
+  await upload(f?.id, await codec.encode(merged));
   return merged;
 }
 
@@ -136,7 +138,7 @@ export async function listBackups(clientId, interactive = false) {
   return (await r.json()).files || [];
 }
 // Makes a dated copy if the newest one is older than `days`; keeps the newest `keep` copies.
-export async function weeklyBackup(state, clientId, { days = 7, keep = 8, force = false } = {}) {
+export async function weeklyBackup(state, clientId, { days = 7, keep = 8, force = false, codec = PLAIN } = {}) {
   if (!hasToken()) return null;
   const files = await listBackups(clientId);
   const newest = files[0] && Date.parse(files[0].modifiedTime);
@@ -144,7 +146,7 @@ export async function weeklyBackup(state, clientId, { days = 7, keep = 8, force 
   const name = `${BK}${new Date().toISOString().slice(0, 10)}.json`;
   const b = 'mbbk' + Date.now();
   const meta = JSON.stringify({ name, parents: ['appDataFolder'] });
-  const body = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(state)}\r\n--${b}--`;
+  const body = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(await codec.encode(state))}\r\n--${b}--`;
   await api('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${b}` }, body });
   for (const f of (await listBackups(clientId)).slice(keep)) await api(`https://www.googleapis.com/drive/v3/files/${f.id}`, { method: 'DELETE' });
   return name;
@@ -152,4 +154,8 @@ export async function weeklyBackup(state, clientId, { days = 7, keep = 8, force 
 export async function downloadBackup(id, clientId) {
   await getToken(clientId, true);
   return (await api(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`)).json();
+}
+export async function deleteBackup(id, clientId) {
+  await getToken(clientId, true);
+  await api(`https://www.googleapis.com/drive/v3/files/${id}`, { method: 'DELETE' });
 }
