@@ -2,6 +2,7 @@ import * as M from './model.js';
 import * as DB from './db.js';
 import * as Sync from './sync.js';
 import * as R from './receipt.js';
+import * as I from './importer.js';
 
 // ---------- globals ----------
 let S;                                   // synced app state
@@ -33,7 +34,17 @@ function commit() {
 }
 
 // ---------- boot ----------
+// ---------- theme (per device): 'system' | 'light' | 'dark' ----------
+function applyTheme() {
+  const t = L.theme || 'system';
+  if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  const dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#1c1c1f' : '#ffffff');
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
+
 async function init() {
+  applyTheme();
   S = M.migrate((await DB.load()) || M.emptyState());
   if (M.materialize(S)) await DB.save(S);
   render();
@@ -240,6 +251,9 @@ function viewMore() {
     ${item('categories', '🏷️', 'Categories & subcategories')}
     ${item('manageAccounts', '🏦', 'Accounts & groups')}
     ${item('receiptRules', '🧾', 'Receipt learning', `${nl} merchant${nl === 1 ? '' : 's'} learned`)}
+  </div><div class="menu">
+    ${item('importStatement', '📥', 'Import statement, CSV or screenshots', 'PDF statements, bank CSV files, banking-app screenshots')}
+    ${item('dupScan', '🧹', 'Find duplicate entries', 'Clean up anything recorded twice')}
   </div><div class="menu">
     ${item('syncScreen', '☁️', 'Google Drive sync & backup', L.lastSync ? 'Last sync ' + new Date(L.lastSync).toLocaleString('en-CA') : 'Not set up')}
     ${item('settings', '⚙️', 'Settings & reminders')}
@@ -679,8 +693,23 @@ function syncScreen() {
     const file = e.target.files[0]; if (!file) return;
     try {
       const data = M.migrate(JSON.parse(await file.text()));
-      if (!confirm('Merge this backup into your current data? (Cancel = keep current data)')) return;
-      S = M.migrate(M.merge(S, data)); M.materialize(S); commit(); toast('Backup merged');
+      const n = M.live(data, 'transactions').length;
+      const b2 = openSheet('Import backup', `<div class="hint">“${esc(file.name)}” has ${n} transactions and ${M.live(data, 'accounts').length} accounts.</div>
+        <div class="list">
+          <div class="li" id="optR"><div class="grow"><b>Replace all data</b><small>Removes everything currently in MoneyBook (on all synced devices) and uses this file instead. Use this for your first import from Money Manager.</small></div><span class="chev">›</span></div>
+          <div class="li" id="optM"><div class="grow"><b>Merge</b><small>Keeps current data and adds this file's records. Same records are combined; newest edit wins.</small></div><span class="chev">›</span></div>
+        </div><div class="row"><button class="secondary" data-act="closeSheet">Cancel</button></div>`);
+      b2.querySelector('#optM').onclick = () => { S = M.migrate(M.merge(S, data)); M.materialize(S); closeSheet(); commit(); toast('Backup merged'); };
+      b2.querySelector('#optR').onclick = () => {
+        if (!confirm('Replace ALL current MoneyBook data with this backup? This cannot be undone (export a backup first if unsure).')) return;
+        const now = Date.now();
+        for (const c of M.COLLECTIONS) {
+          S[c].forEach(r => { r.deleted = true; r.updatedAt = now; });   // tombstones so synced devices drop old data too
+          (data[c] || []).forEach(r => { r.updatedAt = now + 1; });
+        }
+        data.settings = { ...(data.settings || S.settings), updatedAt: now + 1 };
+        S = M.migrate(M.merge(S, data)); M.materialize(S); closeSheet(); commit(); toast(`Replaced — ${n} transactions imported`);
+      };
     } catch (err) { toast('Not a valid backup: ' + err.message); }
   };
   body.querySelector('#out').onclick = () => { Sync.signOut(); toast('Signed out'); };
@@ -695,6 +724,7 @@ function download(name, text, type) {
 function settings() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   const body = openSheet('Settings & reminders', `<form id="f">
+    <label>Appearance<select name="theme">${[['system', 'Match phone / PC setting'], ['light', 'Always light (day mode)'], ['dark', 'Always dark']].map(([k, v]) => `<option value="${k}" ${(L.theme || 'system') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
     <label>Remind me this many days before a payment<input type="number" min="0" max="28" name="rd" value="${S.settings.remindDays ?? 3}"></label>
     <div class="hint">Used for the upcoming banner, this device's notification when you open the app, and new Google Calendar reminders.</div>
     <div class="row"><button class="primary">Save</button></div></form>
@@ -702,7 +732,8 @@ function settings() {
     <div class="pad hint">Status: <b>${perm}</b>. Browsers can only notify when the app is opened; for reliable alerts while it's closed, use the 🔔 Google Calendar reminder on repeat payments.</div>
     <div class="btnrow"><button class="secondary" id="np">Allow notifications</button></div>`);
   const f = body.querySelector('#f');
-  f.onsubmit = e => { e.preventDefault(); S.settings = { ...S.settings, remindDays: Math.max(0, +f.rd.value || 0), updatedAt: Date.now() }; commit(); closeSheet(); toast('Saved'); };
+  f.theme.onchange = () => { L.theme = f.theme.value; saveLocal(); applyTheme(); };
+  f.onsubmit = e => { e.preventDefault(); L.theme = f.theme.value; saveLocal(); applyTheme(); S.settings = { ...S.settings, remindDays: Math.max(0, +f.rd.value || 0), updatedAt: Date.now() }; commit(); closeSheet(); toast('Saved'); };
   body.querySelector('#np').onclick = async () => {
     if (!('Notification' in window)) return toast('Not supported in this browser');
     const p = await Notification.requestPermission(); toast('Notifications: ' + p); if (p === 'granted') { L.lastNotified = ''; notifyUpcoming(); }
@@ -733,6 +764,146 @@ function showStatsCat(topId) {
     <div class="section-title">Transactions</div><div class="day" style="margin:0">${tx.map(t => txRow(t, map)).join('')}</div>`);
 }
 
+// ---------- statement / CSV / screenshot import ----------
+function importStatement() {
+  const body = openSheet('Import transactions', `
+    <div class="hint">Pick one or more files. They are read <b>on this device</b> — nothing is uploaded.</div>
+    <div class="list">
+      <div class="li"><span style="font-size:20px">📄</span><div class="grow">PDF statement<small>Credit card or bank statement downloaded from online banking</small></div></div>
+      <div class="li"><span style="font-size:20px">📊</span><div class="grow">CSV file<small>“Download transactions” from Scotia, CIBC, EQ, Wealthsimple…</small></div></div>
+      <div class="li"><span style="font-size:20px">📱</span><div class="grow">Screenshots<small>Banking-app transaction lists — several at once is fine, overlaps are removed</small></div></div>
+    </div>
+    <div class="row"><button class="primary" id="pick">Choose files</button></div>
+    <input type="file" id="files" multiple accept=".pdf,application/pdf,.csv,text/csv,text/plain,image/*" hidden>
+    <div id="msg" class="hint"></div>`);
+  const msg = t => (body.querySelector('#msg').textContent = t);
+  body.querySelector('#pick').onclick = () => body.querySelector('#files').click();
+  body.querySelector('#files').onchange = async e => {
+    const files = [...e.target.files]; if (!files.length) return;
+    let text = '', items = [], csvTables = [], notes = [];
+    try {
+      for (const [i, f] of files.entries()) {
+        const tag = `${i + 1}/${files.length} ${f.name}`;
+        if (/pdf$/i.test(f.type) || /\.pdf$/i.test(f.name)) {
+          msg(`Reading ${tag}…`);
+          const r = await I.readPdf(f, p => msg(`Reading ${tag}… ${Math.round(p * 100)}%`), (c, pr) => R.ocr(c, pr));
+          text += r.lines.join('\n') + '\n';
+          items.push(...I.parseStatementText(r.lines, f.name));
+          if (r.scanned) notes.push(`${f.name} is a scanned PDF — double-check amounts.`);
+        } else if (/csv|text/i.test(f.type) || /\.(csv|txt)$/i.test(f.name)) {
+          csvTables.push({ name: f.name, table: I.parseCsvText(await f.text()) });
+        } else if (/^image\//.test(f.type)) {
+          msg(`Reading ${tag}… (first time downloads the text reader, ~10 MB)`);
+          const t = await R.ocr(f, p => msg(`Reading ${tag}… ${Math.round(p * 100)}%`));
+          text += t + '\n';
+          items.push(...I.parseStatementText(t.split(/\r?\n/), f.name, { negIsOut: true }));
+        } else notes.push(`Skipped ${f.name} (unsupported type).`);
+      }
+    } catch (err) { return msg('Could not read the file: ' + err.message); }
+    const last4 = I.findLast4(text);
+    const byCard = last4 && M.live(S, 'accounts').find(a => a.cardLast4 === last4);
+    importReview({ items, csvTables, notes, last4, accountId: byCard?.id || L.lastImportAccount || defaultAccount(), auto: !!byCard });
+  };
+}
+
+function importReview(ctx) {
+  const st = { accountId: ctx.accountId, flip: false, rows: [] };
+  function build() {
+    const kind = I.accountKind(S, st.accountId);
+    let rows = ctx.items.map(r => ({ ...r }));
+    ctx.csvTables.forEach(t => rows.push(...I.parseCsvRows(t.table, kind, t.name).rows));
+    if (st.flip) rows.forEach(r => (r.dir = r.dir === 'out' ? 'in' : 'out'));
+    rows.sort((a, b) => a.date.localeCompare(b.date));
+    I.markDuplicates(S, rows, st.accountId);
+    const payer = I.usualPayer(S, st.accountId);
+    for (const r of rows) {
+      r.on = !r.dup;
+      if (r.dir === 'in' && kind === 'card' && I.isPayment(r.desc)) { r.type = 'transfer'; r.other = payer || ''; }
+      else if (r.dir === 'out' && kind !== 'card' && /credit card|visa|mastercard|amex|card payment/i.test(r.desc)) {
+        r.type = 'transfer'; r.other = M.live(S, 'accounts').find(a => I.accountKind(S, a.id) === 'card' && r.desc.includes(a.cardLast4 || '----'))?.id || '';
+      } else {
+        r.type = r.dir === 'out' ? 'expense' : 'income';
+        r.categoryId = (r.type === 'expense' && R.suggest(S, r.desc).categoryId) || '';
+      }
+    }
+    st.rows = rows;
+  }
+  function render() {
+    const rows = st.rows, sel = rows.filter(r => r.on);
+    const dups = rows.filter(r => r.dup).length;
+    const acc = M.get(S, 'accounts', st.accountId);
+    const body = openSheet('Review import', `
+      <label>Account these transactions belong to<select id="acc">${accountOptions(st.accountId)}</select></label>
+      <div class="hint">${ctx.auto ? `Matched card ending ${esc(ctx.last4)} to “${esc(acc?.name)}”. ` : ctx.last4 ? `Statement card ends in ${esc(ctx.last4)} — set that on the account to auto-pick it next time. ` : ''}
+        ${rows.length} found · <b>${dups} duplicate${dups === 1 ? '' : 's'}</b> unticked · ${sel.length} selected.</div>
+      ${ctx.notes.map(n => `<div class="hint">⚠️ ${esc(n)}</div>`).join('')}
+      <div class="btnrow" style="padding:0 0 8px"><button class="secondary" id="all">Select all</button><button class="secondary" id="nodup">Untick duplicates</button><button class="secondary" id="flip">Swap in / out</button></div>
+      <div class="list" id="rows">${rows.map((r, i) => rowHtml(r, i)).join('') || '<div class="empty">No transactions recognised in these files. Send me a sample so I can teach the app this layout.</div>'}</div>
+      <div class="sticky-bar"><button class="primary" id="go" style="width:100%" ${sel.length ? '' : 'disabled'}>Import ${sel.length} transaction${sel.length === 1 ? '' : 's'}</button></div>`);
+    body.querySelector('#acc').onchange = e => { st.accountId = e.target.value; L.lastImportAccount = st.accountId; saveLocal(); build(); render(); };
+    body.querySelector('#all').onclick = () => { rows.forEach(r => (r.on = true)); render(); };
+    body.querySelector('#nodup').onclick = () => { rows.forEach(r => r.dup && (r.on = false)); render(); };
+    body.querySelector('#flip').onclick = () => { st.flip = !st.flip; build(); render(); };
+    body.querySelector('#rows').onchange = e => {
+      const i = +e.target.closest('[data-i]')?.dataset.i; const r = rows[i]; if (!r) return;
+      const k = e.target.dataset.k;
+      if (k === 'on') r.on = e.target.checked;
+      if (k === 'type') { r.type = e.target.value; r.categoryId = ''; r.other = ''; }
+      if (k === 'cat') r.categoryId = e.target.value;
+      if (k === 'other') r.other = e.target.value;
+      const sc = body.scrollTop; render(); $('#sheet .sheet-body').scrollTop = sc;
+    };
+    body.querySelector('#go').onclick = () => doImport(rows.filter(r => r.on));
+  }
+  function rowHtml(r, i) {
+    const cls = r.type === 'income' ? 'inc' : r.type === 'transfer' ? 'xfer' : 'exp';
+    const d = r.dup?.txnId && M.get(S, 'transactions', r.dup.txnId);
+    const dupText = r.dup ? (d ? `Already in MoneyBook: ${d.date} · ${esc(d.note || txLabel(d))} · ${fmt(d.amount)}` : 'Same entry appears in another file you picked') : '';
+    const typeSel = `<select data-k="type">${['expense', 'income', 'transfer'].map(t => `<option value="${t}" ${t === r.type ? 'selected' : ''}>${cap(t)}</option>`).join('')}</select>`;
+    const second = r.type === 'transfer'
+      ? `<select data-k="other"><option value="">${r.dir === 'in' ? 'Paid from…' : 'Paid to…'}</option>${M.live(S, 'accounts').filter(a => a.id !== st.accountId && !a.mortgageAccount).map(a => `<option value="${a.id}" ${a.id === r.other ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>`
+      : `<select data-k="cat">${categoryOptions(r.type, r.categoryId)}</select>`;
+    return `<div class="imp-row ${r.dup ? 'dup' : ''} ${r.on ? '' : 'off'}" data-i="${i}">
+      <input type="checkbox" data-k="on" ${r.on ? 'checked' : ''} aria-label="Import this row">
+      <div class="imp-main"><div>${esc(r.desc)}</div><small>${r.date}${r.dir === 'in' ? ' · money in' : ''}</small></div>
+      <b class="${cls}">${fmt(r.amount)}</b>
+      ${r.on ? `<div class="imp-ctl">${typeSel}${second}</div>` : ''}
+      ${r.dup ? `<div class="dupnote">⚠️ Duplicate — ${dupText}</div>` : ''}</div>`;
+  }
+  function doImport(rows) {
+    const noAcc = rows.filter(r => r.type === 'transfer' && !r.other);
+    if (noAcc.length) return toast(`Pick the other account for ${noAcc.length} transfer${noAcc.length > 1 ? 's' : ''} (e.g. which bank paid the card)`, 4500);
+    const missing = rows.filter(r => r.type !== 'transfer' && !r.categoryId).length;
+    if (missing && !confirm(`${missing} selected row(s) have no category / account yet. Import them as Uncategorized anyway?`)) return;
+    let n = 0;
+    for (const r of rows) {
+      const t = { id: M.uid(), type: r.type, date: r.date, amount: r.amount, note: r.desc, desc: '', imported: true };
+      if (r.type === 'transfer') {
+        if (r.dir === 'out') { t.accountId = st.accountId; t.toAccountId = r.other; }
+        else { t.accountId = r.other; t.toAccountId = st.accountId; }
+      } else { t.accountId = st.accountId; t.categoryId = r.categoryId; }
+      M.put(S, 'transactions', t); n++;
+      if (t.type === 'expense' && t.categoryId) R.learn(S, r.desc, st.accountId, t.categoryId);
+    }
+    L.lastImportAccount = st.accountId; saveLocal();
+    closeSheet(); commit(); toast(`Imported ${n} transaction${n === 1 ? '' : 's'}`);
+  }
+  build(); render();
+}
+
+// ---------- duplicate clean-up for existing data ----------
+function dupScan() {
+  const groups = I.findExistingDuplicates(S);
+  const extra = groups.reduce((a, g) => a + g.length - 1, 0);
+  const body = openSheet('Find duplicate entries', `
+    <div class="hint">Entries with the same date, amount, account and note. The first one is kept; the copies are listed for removal. Check each — two identical purchases on the same day can be real.</div>
+    ${groups.length ? `<div class="row" style="margin-top:0"><button class="danger" id="all">Remove all ${extra} cop${extra === 1 ? 'y' : 'ies'}</button></div>` : ''}
+    <div class="list">${groups.map((g, i) => `<div class="li"><div class="grow">${esc(g[0].note || txLabel(g[0]))}<small>${g[0].date} · ${esc(M.accName(S, g[0].accountId))} · ${g.length}× ${fmt(g[0].amount)}</small></div><button class="secondary" data-g="${i}" style="padding:6px 10px">Remove ${g.length - 1}</button></div>`).join('') || '<div class="empty">No duplicates found 🎉</div>'}</div>`);
+  const drop = g => g.slice(1).forEach(t => M.remove(S, 'transactions', t.id));
+  body.querySelectorAll('[data-g]').forEach(b => (b.onclick = () => { drop(groups[+b.dataset.g]); commit(); dupScan(); }));
+  body.querySelector('#all')?.addEventListener('click', () => { if (confirm(`Remove ${extra} duplicate entries?`)) { groups.forEach(drop); commit(); dupScan(); toast('Duplicates removed'); } });
+}
+
 // ---------- events ----------
 const actions = {
   tab: el => { tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
@@ -748,7 +919,7 @@ const actions = {
   editGroup: () => editGroup(),
   openMortgage: el => mortgageDetail(M.get(S, 'mortgages', el.dataset.id)),
   mortgages: listMortgages, recurring: listRecurring, categories: () => listCategories(), manageAccounts,
-  receiptRules, syncScreen, settings,
+  receiptRules, syncScreen, settings, importStatement, dupScan,
   closeSheet,
   sync: () => (L.clientId ? doSync(true).catch(() => {}) : syncScreen())
 };
