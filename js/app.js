@@ -4,6 +4,7 @@ import * as Sync from './sync.js';
 import * as R from './receipt.js';
 import * as I from './importer.js';
 import * as X from './insights.js';
+import * as Lk from './lock.js';
 
 // ---------- globals ----------
 let S;                                   // synced app state
@@ -47,6 +48,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyThe
 
 async function init() {
   applyTheme();
+  showLock();
   S = M.migrate((await DB.load()) || M.emptyState());
   if (M.materialize(S)) await DB.save(S);
   render();
@@ -68,6 +70,7 @@ async function doSync(interactive = true) {
     await DB.save(S);
     L.lastSync = new Date().toISOString(); saveLocal();
     render();
+    Sync.weeklyBackup(S, L.clientId).then(n => n && interactive && toast('Weekly backup saved to Drive')).catch(() => {});
     if (interactive) toast('Synced with Google Drive ✓');
   } catch (e) { if (interactive) toast(e.message, 4500); throw e; }
   finally { btn.classList.remove('spin'); }
@@ -217,7 +220,7 @@ function viewStats() {
   const rows = Object.entries(top).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   const total = rows.reduce((a, [, v]) => a + v, 0);
   let h = monthNav() + `<div class="seg"><button data-act="statsType" data-type="income" class="${statsType === 'income' ? 'on' : ''}">Income</button><button data-act="statsType" data-type="expense" class="${statsType === 'expense' ? 'on' : ''}">Expenses</button></div>`;
-  if (!rows.length) return h + '<div class="empty">No data for this month.</div>';
+  if (!rows.length) return h + '<div class="empty">No data for this month.</div>' + (statsType === 'expense' ? budgetBars(from, to) : '');
   let acc = 0;
   const stops = rows.map(([, v], i) => { const a = acc; acc += v / total * 100; return `${COLORS[i % COLORS.length]} ${a}% ${acc}%`; });
   h += `<div class="pie" style="background:conic-gradient(${stops.join(',')})"><b>${fmt(total)}</b></div><div class="list">`;
@@ -226,7 +229,7 @@ function viewStats() {
     h += `<div class="li" data-act="statsCat" data-id="${id}"><span class="pct" style="background:${COLORS[i % COLORS.length]}">${Math.round(v / total * 100)}%</span>
       <span class="grow">${esc(c ? `${c.emoji || ''} ${c.name}` : 'Uncategorized')}</span><span>${fmt(v)}</span><span class="chev">›</span></div>`;
   });
-  return h + '</div>';
+  return h + '</div>' + (statsType === 'expense' ? budgetBars(from, to) : '');
 }
 
 function viewAccounts() {
@@ -250,7 +253,7 @@ function viewAccounts() {
     }
     h += '</div>';
   }
-  return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="editAccount">+ Account</button><button class="secondary" data-act="editGroup">+ Group</button></div>`;
+  return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="editAccount">+ Account</button><button class="secondary" data-act="editGroup">+ Group</button></div>`;
 }
 
 function viewMore() {
@@ -264,11 +267,16 @@ function viewMore() {
     ${item('receiptRules', '🧾', 'Receipt learning', `${nl} merchant${nl === 1 ? '' : 's'} learned`)}
   </div><div class="menu">
     ${item('suggestions', '✨', 'Smart suggestions', 'Duplicate schedules, regular bills not yet scheduled')}
+    ${item('forecast', '📈', 'Cash-flow forecast', 'Next 60 days for each bank account')}
+    ${item('budgets', '🎯', 'Monthly budgets')}
+    ${item('taxReports', '🧾', 'Rental & business reports', 'Tax-year totals, rental share, HST')}
     ${item('importStatement', '📥', 'Import statement, CSV or screenshots', 'PDF statements, bank CSV files, banking-app screenshots')}
     ${item('dupScan', '🧹', 'Find duplicate entries', 'Clean up anything recorded twice')}
   </div><div class="menu">
     ${item('syncScreen', '☁️', 'Google Drive sync & backup', L.lastSync ? 'Last sync ' + new Date(L.lastSync).toLocaleString('en-CA') : 'Not set up')}
     ${item('settings', '⚙️', 'Settings & reminders')}
+    ${item('lockSettings', '🔒', 'App lock', L.lock?.pinHash ? (L.lock.credId ? 'PIN + fingerprint' : 'PIN') : 'Off')}
+    ${item('backupsScreen', '🗂️', 'Drive backups', 'Weekly copies, restore')}
   </div><div class="pad hint">MoneyBook keeps your data on this device and in a private app folder in your own Google Drive. Nothing is sent anywhere else.</div>`;
 }
 
@@ -300,6 +308,8 @@ function editTxn(t, preset = {}) {
       <label class="f-mort check"><input type="checkbox" name="prepayment" ${t.prepayment ? 'checked' : ''}> Lump-sum prepayment (100% goes to principal)</label>
       <label>Note<input name="note" value="${esc(t.note)}" placeholder="e.g. Costco" autocomplete="off"></label>
       <label>Description<textarea name="desc">${esc(t.desc)}</textarea></label>
+      <div class="two f-tag"><label>Purpose<select name="tag"><option value="">Auto${X.tagOf(S, { ...t, tag: undefined }) ? ' (' + esc(X.TAGS[X.tagOf(S, { ...t, tag: undefined })]) + ')' : ' (personal)'}</option>${Object.entries(X.TAGS).map(([k, v]) => `<option value="${k}" ${t.tag === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+      <label>HST included<span style="display:flex;gap:6px"><input type="number" step="0.01" min="0" name="hst" value="${t.hst || ''}" placeholder="optional"><button type="button" id="hstBtn" class="secondary" style="padding:0 10px;margin-top:4px">${S.settings.hstRate ?? 13}%</button></span></label></div>
       ${isNew ? `<label>Repeat<select name="repeat"><option value="">Don't repeat</option>${freqOptions('')}</select></label>` : ''}
       <div id="futureHint" class="hint"></div>
       <div class="row"><button class="primary">Save</button>${!isNew ? '<button type="button" id="del" class="danger">Delete</button>' : ''}</div>
@@ -314,9 +324,11 @@ function editTxn(t, preset = {}) {
     body.querySelectorAll('.f-cat').forEach(e => e.classList.toggle('hidden-f', ty === 'transfer' || ty === 'mortgage'));
     body.querySelectorAll('.f-mort').forEach(e => e.classList.toggle('hidden-f', ty !== 'mortgage'));
     body.querySelectorAll('.f-scan').forEach(e => e.classList.toggle('hidden-f', ty !== 'expense'));
+    body.querySelectorAll('.f-tag').forEach(e => e.classList.toggle('hidden-f', ty === 'transfer'));
     body.querySelector('.lbl-acc').textContent = ty === 'transfer' ? 'From account' : ty === 'mortgage' ? 'Paid from' : 'Account';
     f.categoryId.innerHTML = categoryOptions(ty === 'income' ? 'income' : 'expense', t.categoryId);
   }
+  body.querySelector('#hstBtn').onclick = () => { const r = (S.settings.hstRate ?? 13) / 100, a = parseFloat(f.amount.value); if (a > 0) f.hst.value = (a * r / (1 + r)).toFixed(2); };
   function futureHint() { body.querySelector('#futureHint').textContent = f.date.value > today() ? '⏰ Future date — this will show as scheduled and won’t affect balances until then.' : ''; }
   body.querySelector('#ttype').onclick = e => { const b = e.target.closest('button'); if (b) { t.type = b.dataset.type; applyType(); } };
   f.date.oninput = futureHint;
@@ -366,6 +378,8 @@ function editTxn(t, preset = {}) {
     rec.categoryId = t.type === 'expense' || t.type === 'income' ? f.categoryId.value : undefined;
     rec.mortgageId = t.type === 'mortgage' ? f.mortgageId.value : undefined;
     rec.prepayment = t.type === 'mortgage' ? f.prepayment.checked : undefined;
+    rec.tag = t.type !== 'transfer' && f.tag.value ? f.tag.value : undefined;
+    rec.hst = t.type !== 'transfer' && +f.hst.value > 0 ? M.round2(+f.hst.value) : undefined;
     if (t.type === 'transfer' && (!rec.toAccountId || rec.toAccountId === rec.accountId)) return toast('Choose a different “to” account');
     if (t.type === 'mortgage' && !rec.mortgageId) return toast('Add a mortgage first (More › Mortgages)');
     if ((t.type === 'expense' || t.type === 'income') && !rec.categoryId) return toast('Choose a category');
@@ -497,6 +511,7 @@ function editMortgage(m) {
     <div class="two"><label>Payment amount<input type="number" step="0.01" name="payment" value="${m.payment}" required></label>
     <label>&nbsp;<button type="button" id="calc" class="secondary" style="width:100%;margin-top:4px">Calculate</button></label></div>
     <label>Term renewal date (optional)<input type="date" name="termEnd" value="${m.termEnd || ''}"></label>
+    <label>Purpose of payments (for the rental report)<select name="tag"><option value="">Personal</option><option value="rental-shared" ${m.defaultTag === 'rental-shared' ? 'selected' : ''}>🏠 Shared home cost — interest counted at rental %</option><option value="rental" ${m.defaultTag === 'rental' ? 'selected' : ''}>🏘️ Rental property (100%)</option></select></label>
     ${isNew ? `<label>Paid from<select name="payFrom">${accountOptions(defaultAccount())}</select></label>
       <label class="check"><input type="checkbox" name="mkRepeat" checked> Create the repeating payment</label>
       <label>First payment after the balance date<input type="date" name="firstPay" value="${M.addDays(today(), 1)}"></label>` : ''}
@@ -515,7 +530,7 @@ function editMortgage(m) {
     Object.assign(m, {
       name: fv(f, 'name'), lender: fv(f, 'lender'), principal: M.round2(+f.principal.value), startDate: f.startDate.value,
       rate: +f.rate.value, compounding: f.compounding.value, frequency: f.frequency.value, payment: M.round2(+f.payment.value),
-      amortYears: +f.amortYears.value || undefined, termEnd: f.termEnd.value || undefined
+      amortYears: +f.amortYears.value || undefined, termEnd: f.termEnd.value || undefined, defaultTag: f.tag.value || undefined
     });
     if (!(m.principal > 0 && m.payment > 0)) return toast('Enter balance and payment');
     if (!m.accountId || !M.get(S, 'accounts', m.accountId)) {
@@ -627,6 +642,8 @@ function editCategory(c, type) {
   const body = openSheet(isNew ? 'Add category' : 'Edit category', `<form id="f">
     <div class="two"><label>Emoji<input name="emoji" value="${esc(c.emoji)}" maxlength="4"></label><label>Name<input name="name" value="${esc(c.name)}" required></label></div>
     <label>Subcategory of<select name="parentId"><option value="">— Main category —</option>${parents.map(p => `<option value="${p.id}" ${p.id === c.parentId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
+    <label>Default purpose<select name="tag"><option value="">Personal / none</option>${Object.entries(X.TAGS).filter(([k]) => k !== 'personal').map(([k, v]) => `<option value="${k}" ${c.defaultTag === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+    ${c.type === 'expense' ? `<label>Monthly budget (main categories)<input name="budget" type="number" min="0" step="10" value="${c.budget || ''}" placeholder="none"></label>` : ''}
     <div class="row"><button class="primary">Save</button>${!isNew ? '<button type="button" id="del" class="danger">Delete</button>' : ''}</div></form>`);
   const f = body.querySelector('#f');
   if (!isNew) body.querySelector('#del').onclick = () => {
@@ -634,7 +651,7 @@ function editCategory(c, type) {
     M.remove(S, 'categories', c.id); M.live(S, 'categories').filter(x => x.parentId === c.id).forEach(x => M.remove(S, 'categories', x.id));
     commit(); listCategories(c.type);
   };
-  f.onsubmit = e => { e.preventDefault(); Object.assign(c, { name: fv(f, 'name'), emoji: fv(f, 'emoji'), parentId: f.parentId.value || null }); M.put(S, 'categories', c); commit(); listCategories(c.type); };
+  f.onsubmit = e => { e.preventDefault(); Object.assign(c, { name: fv(f, 'name'), emoji: fv(f, 'emoji'), parentId: f.parentId.value || null, defaultTag: f.tag.value || undefined, budget: f.budget && +f.budget.value > 0 ? +f.budget.value : undefined }); M.put(S, 'categories', c); commit(); listCategories(c.type); };
 }
 
 // ---------- accounts & groups ----------
@@ -660,6 +677,7 @@ function editAccount(a) {
     <div class="hint" style="margin-top:-4px">Last 4 digits of every card/account number on this account — used to pick the right account for statements, CSVs, receipts and transfers.</div>
     <div class="two"><label>Statement day (cards)<input type="number" min="1" max="31" name="statementDay" value="${a.statementDay || ''}"></label>
     <label>Payment due (days after statement)<input type="number" min="1" max="40" name="dueDays" value="${a.dueDays || ''}" placeholder="learned"></label></div>
+    <label>Default purpose of its transactions<select name="tag"><option value="">Personal / none</option>${Object.entries(X.TAGS).filter(([k]) => k !== 'personal').map(([k, v]) => `<option value="${k}" ${a.defaultTag === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
     <label>Name on bank statements (multi-account PDFs)<input name="labels" value="${esc((a.statementLabels || []).join('; '))}" placeholder="e.g. Chequing 0"></label>
     ${accountCycleInfo(a)}
     <label class="check"><input type="checkbox" name="inc" ${a.includeInTotals !== false ? 'checked' : ''}> Include in totals</label>
@@ -673,7 +691,7 @@ function editAccount(a) {
     // Setting the "current balance" adjusts the opening balance so history stays intact.
     a.opening = M.round2((+a.opening || 0) + (target - cur));
     Object.assign(a, { groupId: f.groupId.value, name: fv(f, 'name'), statementDay: +f.statementDay.value || undefined, dueDays: +f.dueDays.value || undefined,
-      numbers: fv(f, 'numbers') || undefined, cardLast4: undefined, statementLabels: fv(f, 'labels').split(';').map(x => x.trim()).filter(Boolean),
+      numbers: fv(f, 'numbers') || undefined, cardLast4: undefined, defaultTag: f.tag.value || undefined, statementLabels: fv(f, 'labels').split(';').map(x => x.trim()).filter(Boolean),
       includeInTotals: f.inc.checked, hidden: f.hidden.checked });
     M.put(S, 'accounts', a); closeSheet(); commit(); toast('Account saved');
   };
@@ -754,13 +772,7 @@ function syncScreen() {
       b2.querySelector('#optM').onclick = () => { S = M.migrate(M.merge(S, data)); M.materialize(S); closeSheet(); commit(); toast('Backup merged'); };
       b2.querySelector('#optR').onclick = () => {
         if (!confirm('Replace ALL current MoneyBook data with this backup? This cannot be undone (export a backup first if unsure).')) return;
-        const now = Date.now();
-        for (const c of M.COLLECTIONS) {
-          S[c].forEach(r => { r.deleted = true; r.updatedAt = now; });   // tombstones so synced devices drop old data too
-          (data[c] || []).forEach(r => { r.updatedAt = now + 1; });
-        }
-        data.settings = { ...(data.settings || S.settings), updatedAt: now + 1 };
-        S = M.migrate(M.merge(S, data)); M.materialize(S); closeSheet(); commit(); toast(`Replaced — ${n} transactions imported`);
+        replaceAll(data, n);   // tombstones old records so synced devices drop them too
       };
     } catch (err) { toast('Not a valid backup: ' + err.message); }
   };
@@ -777,6 +789,7 @@ function settings() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   const body = openSheet('Settings & reminders', `<form id="f">
     <label>Appearance<select name="theme">${[['system', 'Match phone / PC setting'], ['light', 'Always light (day mode)'], ['dark', 'Always dark']].map(([k, v]) => `<option value="${k}" ${(L.theme || 'system') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+    <label>HST rate % (for the HST button on transactions)<input type="number" min="0" max="20" step="0.5" name="hst" value="${S.settings.hstRate ?? 13}"></label>
     <label>Remind me this many days before a payment<input type="number" min="0" max="28" name="rd" value="${S.settings.remindDays ?? 3}"></label>
     <div class="hint">Used for the upcoming banner, this device's notification when you open the app, and new Google Calendar reminders.</div>
     <div class="row"><button class="primary">Save</button></div></form>
@@ -785,7 +798,7 @@ function settings() {
     <div class="btnrow"><button class="secondary" id="np">Allow notifications</button></div>`);
   const f = body.querySelector('#f');
   f.theme.onchange = () => { L.theme = f.theme.value; saveLocal(); applyTheme(); };
-  f.onsubmit = e => { e.preventDefault(); L.theme = f.theme.value; saveLocal(); applyTheme(); S.settings = { ...S.settings, remindDays: Math.max(0, +f.rd.value || 0), updatedAt: Date.now() }; commit(); closeSheet(); toast('Saved'); };
+  f.onsubmit = e => { e.preventDefault(); L.theme = f.theme.value; saveLocal(); applyTheme(); S.settings = { ...S.settings, remindDays: Math.max(0, +f.rd.value || 0), hstRate: +f.hst.value || 13, updatedAt: Date.now() }; commit(); closeSheet(); toast('Saved'); };
   body.querySelector('#np').onclick = async () => {
     if (!('Notification' in window)) return toast('Not supported in this browser');
     const p = await Notification.requestPermission(); toast('Notifications: ' + p); if (p === 'granted') { L.lastNotified = ''; notifyUpcoming(); }
@@ -1173,7 +1186,10 @@ function attentionHtml() {
   const cards = X.cardStatuses(S).filter(c => c.status === 'due' || c.status === 'overdue');
   const bills = X.billReminders(S, today(), rd);
   const nSug = suggestionCount();
-  if (!cards.length && !bills.length && !nSug) return '';
+  const m0 = M.ymd(new Date(new Date().getFullYear(), new Date().getMonth(), 1)), m1 = M.ymd(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0));
+  const buds = X.budgetStatus(S, m0, m1).filter(b => b.status === 'over' || b.status === 'near');
+  const lows = forecastLows();
+  if (!cards.length && !bills.length && !nSug && !buds.length && !lows.length) return '';
   const line = (icon, main, sub, btns, warn) => `<div class="li"><span style="font-size:20px">${icon}</span><div class="grow"><span class="${warn ? 'exp' : ''}">${main}</span><small>${sub}</small></div>${btns}</div>`;
   return `<div class="section-title">Needs attention</div><div class="list">` +
     cards.map(c => line('💳', `${esc(c.account.name)} — ${fmt(c.remaining)} ${c.status === 'overdue' ? 'was due' : 'due'} ${c.dueDate.slice(5)}`,
@@ -1182,8 +1198,16 @@ function attentionHtml() {
     bills.map(b => line('🔌', `${esc(b.recurring.template.note || 'Bill')} — about ${fmt(b.recurring.template.amount)}`,
       `${b.overdue ? `Usually around ${b.date.slice(5)} — not added yet` : `Due ${b.date.slice(5)} · reminder`}`,
       `<button class="secondary" data-act="addBill" data-id="${b.recurring.id}" data-date="${b.date}" style="padding:6px 10px">Add</button><button class="secondary" data-act="skipBill" data-id="${b.recurring.id}" data-date="${b.date}" style="padding:6px 8px;margin-left:4px">Skip</button>`, b.overdue)).join('') +
+    lows.map(a => line('📉', `${esc(a.name)} may drop to ${fmt(a.min)}`, `around ${a.minDate.slice(5)} with scheduled payments — see forecast`, '<span class="chev">›</span>', true).replace('<div class="li">', '<div class="li" data-act="forecast">')).join('') +
+    buds.map(b => line('🎯', `${esc(b.category.name)}: ${fmt(b.spent)} of ${fmt(b.budget)}`, b.status === 'over' ? `${fmt(-b.left)} over budget this month` : `${Math.round(b.pct * 100)}% used`, '<span class="chev">›</span>', b.status === 'over').replace('<div class="li">', '<div class="li" data-act="budgets">')).join('') +
     (nSug ? line('✨', `${nSug} suggestion${nSug === 1 ? '' : 's'} for your scheduled payments`, 'Duplicates to remove and regular bills to schedule', '<span class="chev">›</span>').replace('<div class="li">', '<div class="li" data-act="suggestions">') : '') +
     '</div>';
+}
+let lowCache = { at: 0, v: [] };
+function forecastLows() {
+  if (Date.now() - lowCache.at < 4000) return lowCache.v;
+  lowCache = { at: Date.now(), v: X.forecast(S, today(), 30).accounts.filter(a => a.min < 0) };
+  return lowCache.v;
 }
 let sugCache = { at: 0, n: 0 };
 function suggestionCount() {
@@ -1224,6 +1248,178 @@ function dupScan() {
   body.querySelector('#all')?.addEventListener('click', () => { if (confirm(`Remove ${extra} duplicate entries?`)) { groups.forEach(drop); commit(); dupScan(); toast('Duplicates removed'); } });
 }
 
+// ---------- 60-day cash-flow forecast ----------
+function sparkline(series, w = 320, h = 70) {
+  const vals = series.map(p => p.bal), min = Math.min(0, ...vals), max = Math.max(...vals, 1), span = max - min || 1;
+  const x = i => (i / (series.length - 1)) * w, y = v => h - 4 - ((v - min) / span) * (h - 8);
+  const pts = series.map((p, i) => `${x(i).toFixed(1)},${y(p.bal).toFixed(1)}`).join(' ');
+  const zero = min < 0 ? `<line x1="0" x2="${w}" y1="${y(0)}" y2="${y(0)}" stroke="var(--exp)" stroke-dasharray="4 3" stroke-width="1"/>` : '';
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" aria-hidden="true">${zero}<polyline points="${pts}" fill="none" stroke="var(--inc)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function forecastScreen() {
+  const f = X.forecast(S);
+  const low = f.accounts.filter(a => a.min < 0);
+  const body = openSheet('Cash-flow forecast', `
+    <div class="hint">Next ${f.horizon} days for your bank accounts: repeat payments, bill reminders (estimated), card statements due (paid from the account that usually pays each card) and the next predicted statements. ${low.length ? `<b class="exp">⚠️ ${low.length} account${low.length > 1 ? 's go' : ' goes'} below $0.</b>` : '✅ No account goes below $0.'}</div>
+    ${f.accounts.map(a => `<div class="card" style="margin-bottom:10px">
+      <small>${esc(a.name)}</small>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><b>${fmt(a.start)}</b><small>in ${f.horizon} days: <b class="${a.end < 0 ? 'exp' : ''}" style="font-size:14px">${fmt(a.end)}</b></small></div>
+      ${sparkline(a.series)}
+      <small class="${a.min < 0 ? 'exp' : ''}">Lowest: ${fmt(a.min)} on ${a.minDate}</small>
+      <details style="margin-top:6px"><summary class="sub2" style="cursor:pointer">${a.events.length} upcoming item${a.events.length === 1 ? '' : 's'}</summary>
+        <table style="margin-top:6px">${a.events.map(e => `<tr><td>${e.date.slice(5)}</td><td style="text-align:left;white-space:normal">${esc(e.label)}${e.kind === 'estimate' ? ' <span class="pill">est.</span>' : e.kind === 'card' ? ' <span class="pill">card</span>' : ''}</td><td class="${e.amount < 0 ? 'exp' : 'inc'}">${fmt(e.amount)}</td></tr>`).join('')}</table></details>
+    </div>`).join('') || '<div class="empty">No bank accounts with upcoming activity.</div>'}
+    <div class="hint">A forecast only — it never changes your balances. Make sure each card has a payment history (or set its payer by recording one payment) so card dues land on the right account.</div>`);
+}
+
+// ---------- rental & business reports ----------
+function taxReports(which = L.reportWhich || 'rental', year = L.reportYear || +today().slice(0, 4)) {
+  L.reportWhich = which; L.reportYear = year; saveLocal();
+  const { map } = M.mortgageSplits(S);
+  const r = X.taxReport(S, year, which, map);
+  const years = [0, 1, 2, 3].map(i => +today().slice(0, 4) - i);
+  const table = (m, cls) => Object.entries(m).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="${cls}">${fmt(v)}</td></tr>`).join('') || '<tr><td colspan="2" class="sub2">Nothing tagged yet</td></tr>';
+  const body = openSheet(which === 'rental' ? 'Rental report' : 'Business report', `
+    <div class="seg" id="w"><button data-w="rental" class="${which === 'rental' ? 'on' : ''}">🏘️ Rental</button><button data-w="business" class="${which === 'business' ? 'on' : ''}">💼 Business</button></div>
+    <div class="two"><label>Tax year<select id="yr">${years.map(y => `<option ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select></label>
+    ${which === 'rental' ? `<label>Rental share of home %<input id="share" type="number" min="0" max="100" step="0.1" value="${S.settings.rentalShare ?? ''}" placeholder="e.g. 35"></label>` : '<div></div>'}</div>
+    ${which === 'rental' ? '<div class="hint" style="margin-top:-4px">Share of the house used by the basement unit (e.g. by floor area). Applied to items tagged “Shared home cost” and to mortgage interest on payments tagged that way.</div>' : ''}
+    <div class="cards" style="padding:0 0 10px">
+      <div class="card"><small>Income</small><b class="inc">${fmt(r.totalIncome)}</b></div>
+      <div class="card"><small>Expenses</small><b class="exp">${fmt(r.totalExpenses)}</b></div>
+      <div class="card wide"><small>Net ${which === 'rental' ? 'rental' : 'business'} income</small><b>${fmt(r.net)}</b></div>
+      ${which === 'business' ? `<div class="card wide"><small>HST (from amounts entered on transactions)</small><b>${fmt(r.hstNet)} ${r.hstNet >= 0 ? 'owing' : 'refund'}</b><small>Collected ${fmt(r.hstCollected)} · paid (input tax credits) ${fmt(r.hstPaid)}</small></div>` : ''}
+    </div>
+    <div class="section-title">Income</div><div class="tablewrap"><table>${table(r.income, 'inc')}</table></div>
+    <div class="section-title">Expenses</div><div class="tablewrap"><table>${table(r.expenses, 'exp')}</table></div>
+    <div class="btnrow" style="padding:0"><button class="secondary" id="csv">Export CSV (${r.rows.length} items)</button><button class="secondary" id="how">How tagging works</button></div>
+    <div class="hint">A summary to take to your tax return or accountant (rental: CRA form T776). It isn't tax advice — check what's deductible with your accountant.</div>`);
+  body.querySelector('#w').onclick = e => { const b = e.target.closest('button'); if (b) taxReports(b.dataset.w, year); };
+  body.querySelector('#yr').onchange = e => taxReports(which, +e.target.value);
+  body.querySelector('#share')?.addEventListener('change', e => { S.settings = { ...S.settings, rentalShare: +e.target.value || 0, updatedAt: Date.now() }; commit(); taxReports(which, year); });
+  body.querySelector('#csv').onclick = () => {
+    const rows = [['Date', 'Category', 'Note', 'Account', 'Type', 'Amount', 'Share', 'Counted', 'HST']].concat(r.rows.map(x => [x.t.date, x.label, x.t.note || '', M.accName(S, x.t.accountId), x.t.type, x.t.amount, x.f, x.v, x.t.hst || '']));
+    download(`moneybook-${which}-${year}.csv`, rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n'), 'text/csv');
+  };
+  body.querySelector('#how').onclick = () => openSheet('How tagging works', `<div class="pad hint" style="font-size:14px;line-height:1.6">
+    Each transaction has a <b>Purpose</b>: Personal, Rental (100%), Shared home cost (counted at your rental %), or Business.<br><br>
+    Set defaults once so you rarely tag by hand:<br>• <b>Accounts</b> — e.g. your business chequing, savings and Visa → Business.<br>• <b>Categories</b> — e.g. Rental Income → Rental; Utilities, Home insurance, Property tax → Shared home cost.<br>• <b>Mortgage</b> — tag the mortgage payments' paying account or individual payments as Shared home cost; only the interest part is counted.<br><br>
+    You can always override a single transaction in its editor. Add the HST amount on business sales and purchases to get an HST summary.</div>`);
+}
+
+// ---------- budgets ----------
+function budgetsScreen() {
+  const [from, to] = monthRange();
+  const st = Object.fromEntries(X.budgetStatus(S, from, to).map(b => [b.category.id, b]));
+  const { top } = M.categoryTotals(S, from, to, 'expense');
+  const cats = M.live(S, 'categories').filter(c => c.type === 'expense' && !c.parentId).sort((a, b) => (top[b.id] || 0) - (top[a.id] || 0));
+  const body = openSheet('Monthly budgets', `
+    <div class="hint">Set a monthly limit for the categories you want to watch. Progress shows on the Stats tab, and “Needs attention” warns you at 90%. This month so far is shown for each.</div>
+    <form id="f"><div class="list">${cats.map(c => `<div class="li"><div class="grow">${esc((c.emoji || '') + ' ' + c.name)}<small>${MONTHS[cursor.getMonth()]}: ${fmt(top[c.id] || 0)}${st[c.id] ? ` · ${Math.round(st[c.id].pct * 100)}%` : ''}</small></div>
+      <input name="b_${c.id}" type="number" min="0" step="10" inputmode="decimal" value="${c.budget || ''}" placeholder="—" style="width:110px;margin:0"></div>`).join('')}</div>
+    <div class="sticky-bar"><button class="primary" style="width:100%">Save budgets</button></div></form>`);
+  body.querySelector('#f').onsubmit = e => {
+    e.preventDefault();
+    for (const c of cats) {
+      const v = +e.target.elements['b_' + c.id].value || 0;
+      if ((+c.budget || 0) !== v) { const x = { ...c, budget: v || undefined }; M.put(S, 'categories', x); }
+    }
+    closeSheet(); commit(); toast('Budgets saved');
+  };
+}
+function budgetBars(from, to) {
+  const bs = X.budgetStatus(S, from, to); if (!bs.length) return '<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="budgets">🎯 Set monthly budgets</button></div>';
+  const col = { over: 'var(--exp)', near: 'var(--sched)', fast: 'var(--sched)', ok: 'var(--inc)' };
+  return `<div class="section-title">Budgets</div><div class="list">${bs.map(b => `<div class="li" style="display:block">
+    <div style="display:flex;justify-content:space-between"><span>${esc((b.category.emoji || '') + ' ' + b.category.name)}</span><span class="${b.status === 'over' ? 'exp' : ''}">${fmt(b.spent)} / ${fmt(b.budget)}</span></div>
+    <div class="bar"><i style="width:${Math.min(100, b.pct * 100).toFixed(1)}%;background:${col[b.status]}"></i></div>
+    <small>${b.status === 'over' ? `${fmt(-b.left)} over` : `${fmt(b.left)} left`}${b.status === 'fast' ? ' · spending faster than the month' : ''}</small></div>`).join('')}</div>
+    <div class="btnrow" style="margin-top:10px"><button class="secondary" data-act="budgets">Edit budgets</button></div>`;
+}
+
+// ---------- app lock ----------
+let lockedAt = 0, unlocked = !L.lock?.pinHash;
+function showLock() {
+  if (!L.lock?.pinHash) return;
+  unlocked = false;
+  const el = $('#lock'); el.classList.remove('hidden');
+  const inp = el.querySelector('#pinIn'), msg = el.querySelector('#lockMsg'), bio = el.querySelector('#bioBtn');
+  inp.value = ''; msg.textContent = '';
+  bio.classList.toggle('hidden-f', !L.lock.credId);
+  const done = () => { unlocked = true; el.classList.add('hidden'); render(); };
+  const tryPin = async () => { if (await Lk.checkPin(L.lock, inp.value)) done(); else if (inp.value.length >= (L.lock.len || 4)) { msg.textContent = 'Wrong PIN'; inp.value = ''; } };
+  inp.oninput = () => { if (inp.value.length >= (L.lock.len || 4)) tryPin(); };
+  el.querySelector('#unlockBtn').onclick = tryPin;
+  inp.onkeydown = e => { if (e.key === 'Enter') tryPin(); };
+  bio.onclick = async () => { try { if (await Lk.verifyBiometric(L.lock.credId)) done(); } catch (e) { msg.textContent = 'Fingerprint not available — use your PIN'; } };
+  if (L.lock.credId) setTimeout(() => bio.click(), 300); else setTimeout(() => inp.focus(), 100);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!L.lock?.pinHash) return;
+  if (document.visibilityState === 'hidden') lockedAt = Date.now();
+  else if (unlocked && lockedAt && Date.now() - lockedAt >= (L.lock.minutes ?? 1) * 60000) showLock();
+});
+function lockSettings() {
+  const on = !!L.lock?.pinHash;
+  const body = openSheet('App lock', `
+    <div class="hint">Locks MoneyBook on this device with a PIN, and optionally your fingerprint or face. Set separately on each device. The PIN is stored only as a scrambled (hashed) code on this device.</div>
+    <form id="f">
+      <div class="two"><label>${on ? 'New PIN' : 'PIN'} (4–8 digits)<input name="p1" type="password" inputmode="numeric" pattern="\\d{4,8}" autocomplete="new-password"></label>
+      <label>Repeat PIN<input name="p2" type="password" inputmode="numeric" autocomplete="new-password"></label></div>
+      <label>Lock again after leaving the app<select name="min">${[[0, 'Immediately'], [1, 'After 1 minute'], [5, 'After 5 minutes'], [15, 'After 15 minutes']].map(([v, t]) => `<option value="${v}" ${(L.lock?.minutes ?? 1) === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <div class="row"><button class="primary">${on ? 'Save' : 'Turn on lock'}</button>${on ? '<button type="button" id="off" class="danger">Turn off</button>' : ''}</div>
+    </form>
+    ${on ? `<div class="section-title">Fingerprint / face unlock</div><div class="pad hint" id="bioStat">${L.lock.credId ? 'On for this device.' : 'Off.'}</div>
+      <div class="btnrow"><button class="secondary" id="bio">${L.lock.credId ? 'Turn off fingerprint' : 'Use fingerprint / face'}</button></div>` : ''}`);
+  const f = body.querySelector('#f');
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const p1 = f.p1.value, p2 = f.p2.value, minutes = +f.min.value;
+    if (!p1 && on) { L.lock.minutes = minutes; saveLocal(); return toast('Saved'); }
+    if (!/^\d{4,8}$/.test(p1)) return toast('PIN must be 4–8 digits');
+    if (p1 !== p2) return toast("PINs don't match");
+    L.lock = { ...(L.lock || {}), ...(await Lk.makePin(p1)), len: p1.length, minutes }; saveLocal(); unlocked = true;
+    toast('App lock on 🔒'); lockSettings();
+  };
+  body.querySelector('#off')?.addEventListener('click', () => { if (confirm('Turn off the app lock on this device?')) { delete L.lock; saveLocal(); toast('App lock off'); lockSettings(); } });
+  body.querySelector('#bio')?.addEventListener('click', async () => {
+    if (L.lock.credId) { delete L.lock.credId; saveLocal(); return lockSettings(); }
+    if (!(await Lk.biometricSupported())) return toast('This device/browser has no fingerprint or face unlock available');
+    try { L.lock.credId = await Lk.registerBiometric(); saveLocal(); toast('Fingerprint unlock on'); lockSettings(); }
+    catch (err) { toast('Could not set up fingerprint: ' + err.message, 4500); }
+  });
+}
+
+// ---------- Drive backups ----------
+function replaceAll(data, n) {
+  const now = Date.now();
+  for (const c of M.COLLECTIONS) {
+    S[c].forEach(r => { r.deleted = true; r.updatedAt = now; });
+    (data[c] || []).forEach(r => { r.updatedAt = now + 1; });
+  }
+  data.settings = { ...(data.settings || S.settings), updatedAt: now + 1 };
+  S = M.migrate(M.merge(S, data)); M.materialize(S); closeSheet(); commit();
+  toast(`Replaced — ${n ?? M.live(data, 'transactions').length} transactions restored`);
+}
+async function backupsScreen() {
+  const body = openSheet('Drive backups', `<div class="hint">A dated copy of everything is saved in your Google Drive app folder once a week when you sync (the newest 8 are kept). Restore one if something goes wrong.</div>
+    <div class="list" id="bl"><div class="empty">Loading…</div></div>
+    <div class="row"><button class="primary" id="now">Back up now</button></div>`);
+  const load = async () => {
+    try {
+      const files = await Sync.listBackups(L.clientId, true);
+      body.querySelector('#bl').innerHTML = files.map(f => `<div class="li"><div class="grow">${esc(f.name.replace('moneybook-backup-', '').replace('.json', ''))}<small>${new Date(f.modifiedTime).toLocaleString('en-CA')} · ${Math.round((+f.size || 0) / 1024)} KB</small></div><button class="secondary" data-id="${f.id}" style="padding:6px 10px">Restore</button></div>`).join('') || '<div class="empty">No backups yet.</div>';
+      body.querySelectorAll('[data-id]').forEach(b => (b.onclick = async () => {
+        if (!confirm('Replace ALL current data with this backup? Your current data is replaced on every synced device.')) return;
+        try { const d = M.migrate(await Sync.downloadBackup(b.dataset.id, L.clientId)); replaceAll(d); } catch (e) { toast(e.message, 4500); }
+      }));
+    } catch (e) { body.querySelector('#bl').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  body.querySelector('#now').onclick = async () => { try { await Sync.weeklyBackup(S, L.clientId, { force: true }); toast('Backup saved to Drive'); load(); } catch (e) { toast(e.message, 4500); } };
+  if (!L.clientId) return (body.querySelector('#bl').innerHTML = '<div class="empty">Set up Google Drive sync first.</div>');
+  load();
+}
+
 // ---------- events ----------
 const actions = {
   tab: el => { tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
@@ -1239,7 +1435,7 @@ const actions = {
   editGroup: () => editGroup(),
   openMortgage: el => mortgageDetail(M.get(S, 'mortgages', el.dataset.id)),
   mortgages: listMortgages, recurring: listRecurring, categories: () => listCategories(), manageAccounts,
-  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions,
+  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forecast: forecastScreen, budgets: budgetsScreen, taxReports: () => taxReports(), lockSettings, backupsScreen,
   payCard: el => { const id = el.dataset.id; editTxn(null, { type: 'transfer', amount: +el.dataset.amt || '', accountId: I.usualPayer(S, id) || defaultAccount(), toAccountId: id, note: 'Card payment' }); },
   addBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) editTxn(null, { ...r.template, date: el.dataset.date <= today() ? el.dataset.date : today() }); },
   skipBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) { r.dismissed = [...(r.dismissed || []), el.dataset.date].slice(-12); M.put(S, 'recurring', r); commit(); toast('Skipped this time'); } },

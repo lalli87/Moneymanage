@@ -148,3 +148,15 @@ code { font-size: 12px; background: var(--line); padding: 1px 4px; border-radius
 .dupnote { grid-column: 2 / 4; font-size: 12px; color: var(--sched); }
 .pill { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--line); color: var(--ink); margin-left: 4px; }
 .sticky-bar { position: sticky; bottom: calc(-20px - var(--safe-b)); background: var(--bg); padding: 10px 0 calc(10px + var(--safe-b)); margin-top: 8px; }
+
+/* budgets */
+.bar { height: 8px; border-radius: 4px; background: var(--line); margin: 6px 0 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 4px; }
+details summary { list-style: none; } details summary::-webkit-details-marker { display: none; }
+
+/* app lock */
+#lock { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: grid; place-items: center; padding: 24px; }
+#lock.hidden { display: none; }
+.lockbox { width: 100%; max-width: 320px; text-align: center; }
+.lockbox h2 { margin: 6px 0 18px; }
+.lockbox input { text-align: center; font-size: 22px; letter-spacing: 6px; }

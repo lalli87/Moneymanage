@@ -111,3 +111,10 @@ Use **More › Import statement, CSV or screenshots** and pick several files at 
 
 ## Privacy
 This repository contains only the app's code. Your data lives on your devices and in your Google Drive app folder. Setup files made from your statements are imported through **More › Google Drive sync & backup › Import backup** and are never stored here.
+
+## Planning, tax and security
+- **Cash-flow forecast** (Accounts tab or More): shows the next 60 days for each bank account, including repeat payments, bill estimates, unpaid card statements (taken from the account that usually pays each card) and the next predicted statements. "Needs attention" warns you if an account is heading below $0.
+- **Budgets** (More › Monthly budgets, or a category's settings): progress shows on the Stats tab, with warnings at 90% and when you're over.
+- **Rental & business reports** (More): set a Purpose on accounts, categories, the mortgage or single transactions, choosing Rental, Shared home cost (counted at your rental %), or Business. Reports give tax-year totals by category. Only the interest part of mortgage payments is counted. Business reports also include an HST summary from the HST amounts you enter, and every report can be exported as CSV.
+- **App lock** (More › App lock): a PIN plus optional fingerprint/face unlock on each device. The PIN is stored only as a salted hash.
+- **Drive backups** (More › Drive backups): a dated copy is saved weekly during sync and the newest 8 are kept. You can restore any of them.

@@ -1,7 +1,7 @@
 // Smart helpers that look at your own data (on the device) and suggest or remind.
-import { live, get, todayStr, addDays, parseYmd, ymd, round2, occurrences, balances, daysInMonth, catLabel } from './model.js';
+import { live, get, todayStr, addDays, parseYmd, ymd, round2, occurrences, balances, daysInMonth, catLabel, projected } from './model.js';
 import { merchantKey } from './receipt.js';
-import { similar, PAY_WORDS } from './importer.js';
+import { similar, PAY_WORDS, usualPayer } from './importer.js';
 
 const days = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 86400000);
 const median = a => { const s = [...a].sort((x, y) => x - y); const n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0; };
@@ -175,4 +175,100 @@ export function billReminders(S, today = todayStr(), remindDays = 3) {
     }
   }
   return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// ---------- 60-day cash-flow forecast for bank accounts ----------
+// Uses scheduled repeats, bill reminders (estimated), future-dated entries, unpaid card statements and the
+// next predicted card statement. Nothing here changes real balances.
+export function forecast(S, today = todayStr(), horizon = 60) {
+  const end = addDays(today, horizon), bal = balances(S);
+  const kinds = id => kindOf(S, id);
+  const accs = live(S, 'accounts').filter(a => !a.hidden && !a.mortgageAccount && kinds(a.id) === 'asset' && a.includeInTotals !== false);
+  const ids = new Set(accs.map(a => a.id));
+  const ev = [];
+  const push = (date, accountId, amount, label, kind) => { if (ids.has(accountId) && amount) ev.push({ date, accountId, amount: round2(amount), label, kind }); };
+  for (const t of projected(S, today, end, today)) {
+    const a = +t.amount, label = t.note || (t.type === 'mortgage' ? 'Mortgage' : t.type);
+    const kind = t.remind ? 'estimate' : 'scheduled';
+    if (t.type === 'income') push(t.date, t.accountId, a, label, kind);
+    else if (t.type === 'transfer') { push(t.date, t.accountId, -a, label, kind); push(t.date, t.toAccountId, a, label, kind); }
+    else push(t.date, t.accountId, -a, label, kind);
+  }
+  for (const c of cardStatuses(S, today)) {
+    const payer = usualPayer(S, c.account.id); if (!payer) continue;
+    const already = ev.some(e => e.accountId === payer && e.amount < 0 && e.label && /card|visa|mastercard/i.test(e.label) && e.date <= c.dueDate);
+    if ((c.status === 'due' || c.status === 'overdue') && !already)
+      push(c.status === 'overdue' ? addDays(today, 1) : c.dueDate, payer, -c.remaining, `${c.account.name} payment`, 'card');
+    // Next statement (estimated from what's on the card now beyond the current statement).
+    const pc = predictCycle(c.account, today);
+    if (pc && pc.nextDue <= end) {
+      const owed = Math.max(0, -(bal[c.account.id] || 0) - c.remaining);
+      const { held, inst } = planHeld(c.account, pc.next);
+      const est = round2(Math.max(0, owed - held + inst));
+      if (est > 0) push(pc.nextDue, payer, -est, `${c.account.name} next statement (est.)`, 'estimate');
+    }
+  }
+  ev.sort((a, b) => a.date.localeCompare(b.date));
+  const out = accs.map(a => {
+    let b = round2(bal[a.id] || 0); const start = b, series = [{ date: today, bal: b }];
+    let min = b, minDate = today;
+    for (let d = addDays(today, 1); d <= end; d = addDays(d, 1)) {
+      for (const e of ev) if (e.date === d && e.accountId === a.id) b = round2(b + e.amount);
+      series.push({ date: d, bal: b });
+      if (b < min) { min = b; minDate = d; }
+    }
+    return { id: a.id, name: a.name, start, end: b, min, minDate, series, events: ev.filter(e => e.accountId === a.id) };
+  }).filter(x => x.events.length || Math.abs(x.start) > 0.004);
+  return { accounts: out, events: ev, horizon };
+}
+
+// ---------- rental / business tagging and tax-year reports ----------
+export const TAGS = { rental: '🏘️ Rental (100%)', 'rental-shared': '🏠 Shared home cost (rental %)', business: '💼 Business', personal: 'Personal' };
+export function tagOf(S, t) {
+  if (t.tag) return t.tag === 'personal' ? null : t.tag;
+  if (t.type === 'mortgage') { const m = get(S, 'mortgages', t.mortgageId); if (m?.defaultTag) return m.defaultTag; }
+  const a = get(S, 'accounts', t.accountId); if (a?.defaultTag) return a.defaultTag;
+  const c = get(S, 'categories', t.categoryId); const p = c?.parentId && get(S, 'categories', c.parentId);
+  return c?.defaultTag || p?.defaultTag || null;
+}
+export function taxReport(S, year, which, mortgageSplits) {
+  const share = (+S.settings.rentalShare || 0) / 100;
+  const inc = {}, exp = {}, rows = [];
+  let hstCollected = 0, hstPaid = 0;
+  const add = (map, label, amt) => (map[label] = round2((map[label] || 0) + amt));
+  for (const t of live(S, 'transactions')) {
+    if (!t.date.startsWith(String(year)) || t.date > todayStr()) continue;
+    const tag = tagOf(S, t); if (!tag) continue;
+    const isRental = which === 'rental' && (tag === 'rental' || tag === 'rental-shared');
+    if (!(isRental || (which === 'business' && tag === 'business'))) continue;
+    const f = tag === 'rental-shared' ? share : 1;
+    if (t.type === 'mortgage') {                         // only the interest part of a mortgage payment is a cost
+      const sp = mortgageSplits[t.id]; if (!sp) continue;
+      const v = round2(sp.interest * f); add(exp, 'Mortgage interest', v); rows.push({ t, label: 'Mortgage interest', v, f }); continue;
+    }
+    if (t.type !== 'income' && t.type !== 'expense') continue;
+    const label = catLabel(S, t.categoryId), v = round2(+t.amount * f);
+    add(t.type === 'income' ? inc : exp, label, v); rows.push({ t, label, v, f });
+    if (t.hst) { if (t.type === 'income') hstCollected += +t.hst * f; else hstPaid += +t.hst * f; }
+  }
+  const sum = m => round2(Object.values(m).reduce((a, b) => a + b, 0));
+  return { year, which, share, income: inc, expenses: exp, totalIncome: sum(inc), totalExpenses: sum(exp), net: round2(sum(inc) - sum(exp)),
+    hstCollected: round2(hstCollected), hstPaid: round2(hstPaid), hstNet: round2(hstCollected - hstPaid), rows };
+}
+
+// ---------- budgets ----------
+export function budgetStatus(S, from, to, today = todayStr()) {
+  const spent = {};
+  for (const t of live(S, 'transactions')) {
+    if (t.date < from || t.date > to || t.date > today || t.type !== 'expense') continue;
+    const c = get(S, 'categories', t.categoryId); const top = c ? (c.parentId || c.id) : null;
+    if (top) spent[top] = round2((spent[top] || 0) + +t.amount);
+  }
+  // Month progress lets "on track" be judged mid-month.
+  const d0 = parseYmd(from), dim = daysInMonth(d0.getFullYear(), d0.getMonth());
+  const elapsed = today >= to ? 1 : today < from ? 0 : (parseYmd(today).getDate()) / dim;
+  return live(S, 'categories').filter(c => !c.parentId && c.type === 'expense' && +c.budget > 0).map(c => {
+    const s = spent[c.id] || 0, pct = s / +c.budget;
+    return { category: c, budget: +c.budget, spent: s, pct, left: round2(+c.budget - s), status: pct >= 1 ? 'over' : pct >= 0.9 ? 'near' : pct > elapsed + 0.15 ? 'fast' : 'ok' };
+  }).sort((a, b) => b.pct - a.pct);
 }
