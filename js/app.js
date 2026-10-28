@@ -289,12 +289,12 @@ function viewAccounts() {
       }
       const mort = M.live(S, 'mortgages').find(m => m.accountId === a.id);
       if (mort) extra = `<small>${mort.rate}% · ${M.MORT_FREQ[mort.frequency]} ${fmt(mort.payment)}</small>`;
-      h += `<div class="li" data-act="${mort ? 'openMortgage' : 'editAccount'}" data-id="${mort ? mort.id : a.id}"><div class="grow">${esc(a.name)}${a.includeInTotals === false ? ' <span class="sub2">(excluded)</span>' : ''}${extra}</div>
+      h += `<div class="li" data-act="${mort ? 'openMortgage' : 'openAccount'}" data-id="${mort ? mort.id : a.id}"><div class="grow">${esc(a.name)}${a.includeInTotals === false ? ' <span class="sub2">(excluded)</span>' : ''}${extra}</div>
         <span class="${v < 0 ? 'exp' : 'inc'}">${fmt(v)}</span><span class="chev">›</span></div>`;
     }
     h += '</div>';
   }
-  return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="editAccount">+ Account</button><button class="secondary" data-act="editGroup">+ Group</button></div>`;
+  return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
 function viewMore() {
@@ -1508,6 +1508,91 @@ async function backupsScreen() {
   load();
 }
 
+// ---------- account register: Daily / Monthly / Annually ----------
+// Deposit = money into the account, Withdrawal = money out. Balance = balance at the end of the period.
+function accountEntries(id) {
+  const a = M.get(S, 'accounts', id); const t0 = today();
+  const list = M.live(S, 'transactions').filter(t => t.date <= t0 && (t.accountId === id || t.toAccountId === id))
+    .sort((x, y) => x.date.localeCompare(y.date) || (x.updatedAt || 0) - (y.updatedAt || 0));
+  let bal = +a?.opening || 0;
+  return list.map(t => {
+    const inn = (t.type === 'income' && t.accountId === id) || (t.type === 'transfer' && t.toAccountId === id);
+    const v = inn ? +t.amount : -t.amount;
+    bal = M.round2(bal + v);
+    return { t, v, bal };
+  });
+}
+function sumPeriod(es, from, to, openBal) {
+  let dep = 0, wd = 0, end = openBal;
+  for (const e of es) { if (e.t.date < from) { end = e.bal; continue; } if (e.t.date > to) break; if (e.v > 0) dep += e.v; else wd -= e.v; end = e.bal; }
+  return { dep: M.round2(dep), wd: M.round2(wd), net: M.round2(dep - wd), end };
+}
+function accountDetail(id, view = L.accView || 'daily', anchor) {
+  const a = M.get(S, 'accounts', id); if (!a) return;
+  const mort = M.live(S, 'mortgages').find(m => m.accountId === id); if (mort) return mortgageDetail(mort);
+  L.accView = view; saveLocal();
+  const t0 = today();
+  anchor = anchor || (view === 'daily' ? t0.slice(0, 7) : t0.slice(0, 4));
+  const es = accountEntries(id), open = +a.opening || 0;
+  const tabs = `<div class="seg" id="av">${[['daily', 'Daily'], ['monthly', 'Monthly'], ['annual', 'Annually']].map(([k, l]) => `<button data-v="${k}" class="${view === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const head = (label, s) => `<div class="card" style="margin-bottom:8px"><small>Statement ${label}</small>
+    <div class="summary" style="grid-template-columns:repeat(4,1fr);padding:6px 0 0;border:0;background:none">
+      <div><small>Deposit</small><b class="inc">${fmt(s.dep)}</b></div><div><small>Withdrawal</small><b class="exp">${fmt(s.wd)}</b></div>
+      <div><small>Total</small><b>${fmt(s.net)}</b></div><div><small>Balance</small><b class="${s.end < 0 ? 'exp' : 'inc'}">${fmt(s.end)}</b></div></div></div>`;
+  const nav = txt => `<div class="monthnav" style="background:none;padding:4px 0 8px"><button data-nav="-1" aria-label="Previous">‹</button><b>${txt}</b><button data-nav="1" aria-label="Next">›</button></div>`;
+  let html = '';
+  if (view === 'daily') {
+    const [y, mo] = anchor.split('-').map(Number);
+    const from = `${anchor}-01`, to = M.ymd(new Date(y, mo, 0));
+    const s = sumPeriod(es, from, to, open);
+    const inMonth = es.filter(e => e.t.date >= from && e.t.date <= to);
+    const byDay = {}; inMonth.forEach(e => (byDay[e.t.date] = byDay[e.t.date] || []).push(e));
+    html = nav(`${y} ${MONTHS[mo - 1]}`) + head(`${from.replace(/-/g, '.')} ~ ${to.slice(5).replace('-', '.')}`, s) +
+      (Object.keys(byDay).sort().reverse().map(d => {
+        const list = byDay[d], dt = M.parseYmd(d);
+        const dep = list.filter(e => e.v > 0).reduce((x, e) => x + e.v, 0), wd = -list.filter(e => e.v < 0).reduce((x, e) => x + e.v, 0);
+        return `<div class="day" style="margin-top:8px"><div class="dayhead"><span class="d">${dt.getDate()}</span><span class="wd">${WD[dt.getDay()]}</span><small class="sub2">${d.slice(0, 7)}</small><span class="sp"></span>
+          <span class="amt inc">${dep ? fmt(dep) : ''}</span><span class="amt exp">${wd ? fmt(wd) : ''}</span></div>
+          ${[...list].reverse().map(e => `<div class="tx" data-tx="${e.t.id}"><div class="tx-cat">${esc(txLabel(e.t))}</div>
+            <div class="tx-main"><div>${esc(e.t.note || '')}</div><small>${esc(e.t.type === 'transfer' ? (e.v > 0 ? 'From ' + M.accName(S, e.t.accountId) : 'To ' + M.accName(S, e.t.toAccountId)) : a.name)}</small></div>
+            <div style="text-align:right"><div class="amt ${e.v > 0 ? 'inc' : 'exp'}">${fmt(Math.abs(e.v))}</div><small class="sub2">(Balance ${fmt(e.bal)})</small></div></div>`).join('')}</div>`;
+      }).join('') || '<div class="empty">No transactions this month.</div>');
+  } else if (view === 'monthly') {
+    const y = +anchor;
+    const s = sumPeriod(es, `${y}-01-01`, `${y}-12-31`, open);
+    const rows = [];
+    for (let mo = 12; mo >= 1; mo--) {
+      const from = `${y}-${String(mo).padStart(2, '0')}-01`, to = M.ymd(new Date(y, mo, 0));
+      if (from > t0) continue;
+      rows.push([mo, from, to, sumPeriod(es, from, to, open)]);
+    }
+    html = nav(String(y)) + head(`${y}.01.01 ~ 12.31`, s) + `<div class="list">${rows.map(([mo, from, to, r]) => `<div class="li" data-month="${from.slice(0, 7)}">
+      <div class="grow"><b>${MONTHS[mo - 1]}</b><small>${from.slice(5).replace('-', '.')} ~ ${to.slice(5).replace('-', '.')}</small></div>
+      <div style="text-align:right"><span class="inc">${fmt(r.dep)}</span><small>${fmt(r.net)}</small></div>
+      <div style="text-align:right;min-width:92px"><span class="exp">${fmt(r.wd)}</span><small>(${fmt(r.end)})</small></div></div>`).join('')}</div>`;
+  } else {
+    const first = es.length ? +es[0].t.date.slice(0, 4) : +t0.slice(0, 4), last = +t0.slice(0, 4);
+    const all = sumPeriod(es, `${first}-01-01`, `${last}-12-31`, open);
+    const rows = []; for (let y = last; y >= first; y--) rows.push([y, sumPeriod(es, `${y}-01-01`, `${y}-12-31`, open)]);
+    html = `<div style="text-align:center;padding:4px 0 8px"><b>${first} ~ ${last}</b></div>` + head(`${first}.01.01 ~ ${last}.12.31`, all) +
+      `<div class="list">${rows.map(([y, r]) => `<div class="li" data-year="${y}"><div class="grow"><b>${y}</b><small>${y}.01.01 ~ 12.31</small></div>
+        <div style="text-align:right"><span class="inc">${fmt(r.dep)}</span><small>${fmt(r.net)}</small></div>
+        <div style="text-align:right;min-width:92px"><span class="exp">${fmt(r.wd)}</span><small>(${fmt(r.end)})</small></div></div>`).join('')}</div>`;
+  }
+  const body = openSheet(a.name, tabs + html + `<div class="btnrow" style="padding:12px 0 0"><button class="secondary" id="addHere">+ Add transaction</button><button class="secondary" id="editAcc">✏️ Edit account</button></div>`);
+  body.querySelector('#av').onclick = e => { const b = e.target.closest('button'); if (b) accountDetail(id, b.dataset.v); };
+  body.querySelectorAll('[data-nav]').forEach(b => (b.onclick = () => {
+    const d = +b.dataset.nav;
+    if (view === 'daily') { const [y, mo] = anchor.split('-').map(Number); const n = new Date(y, mo - 1 + d, 1); accountDetail(id, view, `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`); }
+    else accountDetail(id, view, String(+anchor + d));
+  }));
+  body.querySelectorAll('[data-month]').forEach(el => (el.onclick = () => accountDetail(id, 'daily', el.dataset.month)));
+  body.querySelectorAll('[data-year]').forEach(el => (el.onclick = () => accountDetail(id, 'monthly', el.dataset.year)));
+  body.querySelectorAll('[data-tx]').forEach(el => (el.onclick = () => editTxn(M.get(S, 'transactions', el.dataset.tx))));
+  body.querySelector('#addHere').onclick = () => editTxn(null, { accountId: id });
+  body.querySelector('#editAcc').onclick = () => editAccount(a);
+}
+
 // ---------- events ----------
 const actions = {
   tab: el => { tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
@@ -1520,6 +1605,7 @@ const actions = {
   statsType: el => { statsType = el.dataset.type; render(); },
   statsCat: el => showStatsCat(el.dataset.id),
   editAccount: el => editAccount(M.get(S, 'accounts', el.dataset.id)),
+  openAccount: el => accountDetail(el.dataset.id),
   editGroup: () => editGroup(),
   openMortgage: el => mortgageDetail(M.get(S, 'mortgages', el.dataset.id)),
   mortgages: listMortgages, recurring: listRecurring, categories: () => listCategories(), manageAccounts,
