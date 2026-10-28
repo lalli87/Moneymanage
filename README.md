@@ -72,3 +72,12 @@ Upload changed files to the repo. The app picks up the new version the next time
 | `js/receipt.js` | OCR, receipt parsing, merchant learning |
 | `js/db.js` | On-device storage (IndexedDB) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Installable app and offline support |
+
+## Android app (Samsung / any Android phone)
+GitHub Actions builds this repo into a real installable Android app (`ca.kamal.moneybook`). The app is a Trusted Web Activity: it runs this site full-screen through Chrome, so Google sign-in, Drive sync, the camera for receipts and notifications all work.
+
+- **Build:** runs on every change to `android/`, or manually from **Actions › Build Android app › Run workflow**.
+- **Secrets needed:** two private repo secrets, `KEYSTORE_B64` (the signing key) and `KEYSTORE_PASSWORD`.
+- **Install or update:** on the phone, open **Releases** (the latest "MoneyBook for Android" release) and tap `MoneyBook.apk`. Updates install over the top, and your data is kept.
+- **Full-screen (no address bar):** needs `https://lalli87.github.io/.well-known/assetlinks.json`, served from the `lalli87.github.io` repo.
+- **Signing key:** the key is never stored in this repo. It lives only in the repo secrets and in your private backup. Every update must be signed with the same key.

@@ -1,5 +1,5 @@
 // Offline support: app files network-first (so updates arrive), OCR engine cache-first.
-const CACHE = 'moneybook-v1';
+const CACHE = 'moneybook-v2';
 const ASSETS = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'js/app.js', 'js/model.js', 'js/db.js', 'js/sync.js', 'js/receipt.js', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS))); self.skipWaiting(); });
 self.addEventListener('activate', e => {

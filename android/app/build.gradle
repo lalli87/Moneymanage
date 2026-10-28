@@ -1,0 +1,41 @@
+plugins { id 'com.android.application' }
+
+def ksPath = System.getenv('KS_PATH')
+def ksPass = System.getenv('KS_PASS')
+
+android {
+  namespace 'ca.kamal.moneybook'
+  compileSdk 34
+  defaultConfig {
+    applicationId 'ca.kamal.moneybook'
+    minSdk 24
+    targetSdk 34
+    versionCode((System.getenv('VERSION_CODE') ?: '1') as int)
+    versionName "1.${System.getenv('VERSION_CODE') ?: '0'}"
+  }
+  signingConfigs {
+    release {
+      if (ksPath) {
+        storeFile file(ksPath)
+        storePassword ksPass
+        keyAlias 'moneybook'
+        keyPassword ksPass
+        storeType 'pkcs12'
+      }
+    }
+  }
+  buildTypes {
+    release {
+      minifyEnabled false
+      signingConfig ksPath ? signingConfigs.release : signingConfigs.debug
+    }
+  }
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+}
+
+dependencies {
+  implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+}

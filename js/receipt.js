@@ -6,7 +6,7 @@ let tessP;
 function loadTesseract() {
   tessP = tessP || new Promise((res, rej) => {
     const sc = document.createElement('script');
-    sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
     sc.onload = res; sc.onerror = () => rej(new Error('Could not load OCR engine (needs internet the first time)'));
     document.head.appendChild(sc);
   });
