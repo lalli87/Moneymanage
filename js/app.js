@@ -297,6 +297,8 @@ function viewAccounts() {
       } else if (a.statementDay) {
         const sd = M.lastStatementDate(+a.statementDay); const atStmt = M.balances(S, sd)[a.id] || 0;
         extra = `<small>Statement (${sd.slice(5)}): ${fmt(-atStmt)} · New since: ${fmt(-(v - atStmt))}</small>`;
+      } else if (g.kind === 'card') {
+        extra = `<small>Owing ${fmt(Math.max(0, -v))} · <span class="exp">add statement date to see payable & due date</span></small>`;
       }
       const mort = M.live(S, 'mortgages').find(m => m.accountId === a.id);
       if (mort) extra = `<small>${mort.rate}% · ${M.MORT_FREQ[mort.frequency]} ${fmt(mort.payment)}</small>`;
