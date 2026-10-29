@@ -278,6 +278,7 @@ function viewStats() {
 
 function viewAccounts() {
   const b = M.balances(S); const tot = M.totals(S, b);
+  const cardSt = Object.fromEntries(X.cardStatuses(S).map(c => [c.account.id, c]));
   let h = `<div class="summary"><div><small>Assets</small><b class="inc">${fmt(tot.assets)}</b></div><div><small>Liabilities</small><b class="exp">${fmt(tot.liabilities)}</b></div><div><small>Net worth</small><b>${fmt(tot.net)}</b></div></div>`;
   for (const g of sortedGroups()) {
     const accs = M.live(S, 'accounts').filter(a => a.groupId === g.id && !a.hidden);
@@ -286,7 +287,14 @@ function viewAccounts() {
     h += `<div class="grouphead"><span>${esc(g.name)}</span><span class="${gsum < 0 ? 'exp' : 'inc'}">${fmt(gsum)}</span></div><div class="list">`;
     for (const a of accs) {
       const v = b[a.id] || 0; let extra = '';
-      if (a.statementDay) {
+      const cs = cardSt[a.id];
+      if (cs) {
+        // Like Money Manager: what's owing from the last statement, and new charges since it.
+        const outstanding = Math.max(0, M.round2(-v - cs.remaining));
+        const pay = cs.status === 'paid' ? `✓ Statement paid` : cs.status === 'none' ? 'Nothing due' :
+          `<span class="${cs.status === 'overdue' ? 'exp' : ''}">Payable ${fmt(cs.remaining)} · ${cs.status === 'overdue' ? 'overdue since' : 'due'} ${cs.dueDate.slice(5)}</span>`;
+        extra = `<small>${pay} · Outstanding ${fmt(outstanding)}${cs.predicted ? ' · est.' : ''}</small>`;
+      } else if (a.statementDay) {
         const sd = M.lastStatementDate(+a.statementDay); const atStmt = M.balances(S, sd)[a.id] || 0;
         extra = `<small>Statement (${sd.slice(5)}): ${fmt(-atStmt)} · New since: ${fmt(-(v - atStmt))}</small>`;
       }
