@@ -53,7 +53,8 @@ async function init() {
   try { vault = await DB.getKV('vault'); } catch {}
   S = M.migrate((await DB.load()) || M.emptyState());
   if (M.materialize(S)) await DB.save(S);
-  const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await DB.save(S); setTimeout(() => toast(`Merged ${dd.categories + dd.groups + dd.accounts} duplicate categories/accounts`), 800); }
+  // With sync on, clean up duplicates only after merging the latest from Drive (doSync), never on stale data.
+  if (!L.clientId) { const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await DB.save(S); setTimeout(() => toast(`Merged ${dd.categories + dd.groups + dd.accounts} duplicate categories/accounts`), 800); } }
   render();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (L.clientId) Sync.loadGis().catch(() => {});

@@ -341,6 +341,7 @@ export function dedupe(s) {
     [t.accountId, t.toAccountId].forEach(id => id && (used[id] = (used[id] || 0) + 1));
   }
   live(s, 'recurring').forEach(r => [r.template?.categoryId, r.template?.accountId, r.template?.toAccountId].forEach(id => id && (used[id] = (used[id] || 0) + 1)));
+  live(s, 'accounts').forEach(a => a.groupId && (used[a.groupId] = (used[a.groupId] || 0) + 1));
   const pick = list => [...list].sort((a, b) => (used[b.id] || 0) - (used[a.id] || 0) || (a.id.startsWith('def_') ? 1 : 0) - (b.id.startsWith('def_') ? 1 : 0) || (a.updatedAt || 0) - (b.updatedAt || 0))[0];
   const remap = {};
   // groups
@@ -399,14 +400,42 @@ export function dedupe(s) {
 }
 
 // ---------- sync merge (last-writer-wins per record, tombstones for deletes) ----------
+// History that only ever grows (card statements, plans, lender checkpoints…) is combined from both copies,
+// so a newer edit elsewhere on the record can never wipe it.
+const byKey = (list, key) => { const m = new Map(); for (const x of list) { const k = key(x); m.set(k, { ...(m.get(k) || {}), ...x }); } return [...m.values()]; };
+const unionList = (x, y, key) => (x?.length || y?.length) ? byKey([...(y || []), ...(x || [])], key) : x;
+function keepHistory(c, win, lose) {
+  if (!lose || win.deleted) return win;
+  const r = { ...win };
+  if (c === 'accounts') {
+    r.cycles = unionList(win.cycles, lose.cycles, x => x.statementDate);
+    if (r.cycles) r.cycles = r.cycles.sort((p, q) => p.statementDate.localeCompare(q.statementDate)).slice(-24);
+    r.plans = unionList(win.plans, lose.plans, x => `${x.start}|${x.original}`);
+    for (const f of ['importSigs', 'statementLabels']) if (win[f] || lose[f]) r[f] = [...new Set([...(win[f] || []), ...(lose[f] || [])])];
+    if (lose.numbers && !win.numbers) r.numbers = lose.numbers;
+    for (const f of ['statementDay', 'dueDays']) if (r[f] == null && lose[f] != null) r[f] = lose[f];
+  }
+  if (c === 'mortgages') {
+    r.checkpoints = unionList(win.checkpoints, lose.checkpoints, x => x.date);
+    if (r.checkpoints) r.checkpoints.sort((p, q) => p.date.localeCompare(q.date));
+    r.rateChanges = unionList(win.rateChanges, lose.rateChanges, x => x.date);
+    if (lose.annual) r.annual = { ...lose.annual, ...(win.annual || {}) };
+    if (!win.schedule?.length && lose.schedule?.length) r.schedule = lose.schedule;
+  }
+  for (const k of Object.keys(r)) if (r[k] === undefined) delete r[k];
+  return r;
+}
 export function merge(a, b) {
   const out = { schema: 1 };
   for (const c of COLLECTIONS) {
     const map = new Map();
     for (const r of [...(a[c] || []), ...(b[c] || [])]) {
       const e = map.get(r.id);
-      if (!e || (r.updatedAt || 0) > (e.updatedAt || 0)) map.set(r.id, r);
-      else if (c === 'recurring' && e && r.materializedThrough > (e.materializedThrough || '')) e.materializedThrough = r.materializedThrough;
+      if (!e) { map.set(r.id, r); continue; }
+      const [win, lose] = (r.updatedAt || 0) > (e.updatedAt || 0) ? [r, e] : [e, r];
+      const m = keepHistory(c, win, lose);
+      if (c === 'recurring' && lose.materializedThrough > (m.materializedThrough || '')) m.materializedThrough = lose.materializedThrough;
+      map.set(r.id, m);
     }
     out[c] = [...map.values()];
   }
