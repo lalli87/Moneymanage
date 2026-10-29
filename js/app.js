@@ -311,6 +311,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
+const APP_VERSION = '2026.10.29-b';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -332,7 +333,7 @@ function viewMore() {
     ${item('settings', '⚙️', 'Settings & reminders')}
     ${item('lockSettings', '🔒', 'App lock', L.lock?.pinHash ? (L.lock.credId ? 'PIN + fingerprint' : 'PIN') : 'Off')}
     ${item('backupsScreen', '🗂️', 'Drive backups', 'Weekly copies, restore')}
-  </div><div class="pad hint">MoneyBook keeps your data on this device and in a private app folder in your own Google Drive. Nothing is sent anywhere else.</div>`;
+  </div><div class="pad hint" style="text-align:center">MoneyBook version <b>${APP_VERSION}</b></div><div class="pad hint">MoneyBook keeps your data on this device and in a private app folder in your own Google Drive. Nothing is sent anywhere else.</div>`;
 }
 
 // ---------- sheet ----------
@@ -1571,6 +1572,17 @@ function lockSettings() {
 }
 
 // ---------- Drive backups ----------
+// Adds card statement history, plans, numbers and mortgage checkpoints from a backup onto current records only.
+function recoverHistory(data) {
+  let n = 0;
+  for (const c of ['accounts', 'mortgages']) for (const old of data[c] || []) {
+    const cur = M.get(S, c, old.id); if (!cur) continue;
+    const before = JSON.stringify(cur);
+    const merged = M.merge({ [c]: [cur] }, { [c]: [{ ...old, updatedAt: 0 }] })[c][0];
+    if (JSON.stringify(merged) !== before) { M.put(S, c, merged); n++; }
+  }
+  return n;
+}
 function replaceAll(data, n) {
   const now = Date.now();
   for (const c of M.COLLECTIONS) {
@@ -1588,7 +1600,15 @@ async function backupsScreen() {
   const load = async () => {
     try {
       const files = await Sync.listBackups(L.clientId, true);
-      body.querySelector('#bl').innerHTML = files.map(f => `<div class="li"><div class="grow">${esc(f.name.replace('moneybook-backup-', '').replace('.json', ''))}<small>${new Date(f.modifiedTime).toLocaleString('en-CA')} · ${Math.round((+f.size || 0) / 1024)} KB</small></div><button class="secondary" data-id="${f.id}" style="padding:6px 10px">Restore</button></div>`).join('') || '<div class="empty">No backups yet.</div>';
+      body.querySelector('#bl').innerHTML = files.map(f => `<div class="li"><div class="grow">${esc(f.name.replace('moneybook-backup-', '').replace('.json', ''))}<small>${new Date(f.modifiedTime).toLocaleString('en-CA')} · ${Math.round((+f.size || 0) / 1024)} KB</small></div><button class="secondary" data-hist="${f.id}" style="padding:6px 8px">History only</button><button class="secondary" data-id="${f.id}" style="padding:6px 8px;margin-left:4px">Restore</button></div>`).join('') || '<div class="empty">No backups yet.</div>';
+      body.querySelectorAll('[data-hist]').forEach(b => (b.onclick = async () => {
+        try {
+          let raw = await Sync.downloadBackup(b.dataset.hist, L.clientId);
+          if (Cx.isEncrypted(raw)) { if (vault && vault.salt === raw.salt) raw = await Cx.decryptJSON(raw, vault.key); else { const r = await askPassphrase(raw); if (!r) return; raw = r.data; } }
+          const n = recoverHistory(M.migrate(raw)); commit();
+          toast(n ? `Recovered statement history for ${n} account${n === 1 ? '' : 's'}/mortgage — nothing else changed` : 'That backup has no extra history to add', 4500);
+        } catch (e) { toast(e.message, 4500); }
+      }));
       body.querySelectorAll('[data-id]').forEach(b => (b.onclick = async () => {
         if (!confirm('Replace ALL current data with this backup? Your current data is replaced on every synced device.')) return;
         try {
