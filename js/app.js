@@ -416,7 +416,7 @@ function editTxn(t, preset = {}) {
     if (!items?.length) return (el.innerHTML = '');
     el.innerHTML = `<small>${items.length} items on the receipt — change any category and the split updates (and is remembered next time)</small>` +
       items.map((it, i) => `<div style="display:grid;grid-template-columns:1fr 70px;gap:4px 8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)" data-it="${i}">
-        <span style="font-size:13px">${esc(it.desc)}</span><span style="text-align:right;font-size:13px">${fmt(it.amount)}</span>
+        <span style="font-size:13px">${esc(it.desc)}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</span><span style="text-align:right;font-size:13px">${fmt(it.amount)}</span>
         <select data-k="icat" style="grid-column:1/3;margin:0;padding:6px;font-size:13px">${categoryOptions('expense', it.categoryId)}</select></div>`).join('');
   }
   const rebuildFromItems = () => { splits = R.buildSplits(items, amt()); renderSplit(); };
@@ -466,7 +466,9 @@ function editTxn(t, preset = {}) {
       futureHint();
       const pi = R.parseItems(text);
       if (pi.items.length >= 2) {
-        items = pi.items.map(i => ({ ...i, ...R.classifyItem(S, i.desc) }));
+        // Anything the app can't place gets the store's usual category, so you only fix the exceptions.
+        const storeCat = sg.categoryId || (catTouched && f.categoryId.value) || '';
+        items = pi.items.map(i => { const c = R.classifyItem(S, i.desc); return { ...i, ...c, ...(c.categoryId ? {} : storeCat ? { categoryId: storeCat, how: 'store' } : {}) }; });
         const cats = new Set(items.map(i => i.categoryId || '?'));
         if (cats.size > 1 || cats.has('?')) { splitOn = true; renderItems(); rebuildFromItems(); }
         else { const only = [...cats][0]; f.categoryId.value = only; t.categoryId = only; catTouched = true; }
@@ -1741,6 +1743,73 @@ function suggestedCategories(type = 'expense') {
 }
 
 // ---------- events ----------
+// ---------- searchable category picker (replaces scrolling long dropdowns) ----------
+// Every category dropdown gets a button; tapping it opens a list with a search box at the top.
+function catLabelOf(sel, i) {
+  const o = sel.options[i]; if (!o) return '';
+  const txt = o.text.replace(/\u00a0/g, ' ').trim();
+  if (!txt.startsWith('↳')) return txt;
+  for (let j = i - 1; j >= 0; j--) { const p = sel.options[j].text.replace(/\u00a0/g, ' ').trim(); if (!p.startsWith('↳')) return `${p} › ${txt.replace(/^↳\s*/, '')}`; }
+  return txt;
+}
+function enhanceCatSelects(root) {
+  (root.querySelectorAll ? root.querySelectorAll('select') : []).forEach(sel => {
+    if (sel.dataset.picker || sel.options[0]?.text !== '— Choose —') return;
+    sel.dataset.picker = '1';
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'catpick';
+    sel.classList.add('hidden-f'); sel.after(btn);
+    sel._sync = () => { const i = sel.selectedIndex; btn.textContent = i > 0 ? catLabelOf(sel, i) : '— Choose —'; btn.classList.toggle('empty', i <= 0); };
+    sel._sync(); sel.addEventListener('change', sel._sync);
+    // Keep the button in step when code sets the value directly (scan results, learned suggestions).
+    const vd = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+    Object.defineProperty(sel, 'value', { configurable: true, get() { return vd.get.call(this); }, set(v) { vd.set.call(this, v); this._sync?.(); } });
+    btn.onclick = () => openPicker(sel);
+  });
+}
+let useCount = { at: 0, map: {} };
+function categoryUse() {
+  if (Date.now() - useCount.at < 10000) return useCount.map;
+  const map = {}; const since = M.addDays(today(), -180);
+  M.live(S, 'transactions').forEach(t => { if (t.date < since) return; (t.splits?.length ? t.splits : [t]).forEach(x => x.categoryId && (map[x.categoryId] = (map[x.categoryId] || 0) + 1)); });
+  return (useCount = { at: Date.now(), map }).map;
+}
+function openPicker(sel) {
+  const opts = [...sel.options].map((o, i) => ({ value: o.value, label: catLabelOf(sel, i), i })).filter(o => o.value);
+  const use = categoryUse();
+  const el = document.createElement('div'); el.id = 'picker';
+  el.innerHTML = `<div class="pk-head"><input type="search" placeholder="Type to find a category…" aria-label="Search categories" autocomplete="off"><button type="button" class="iconbtn" aria-label="Close">✕</button></div><div class="pk-list"></div>`;
+  document.body.appendChild(el);
+  const inp = el.querySelector('input'), list = el.querySelector('.pk-list');
+  const close = () => el.remove();
+  const nm = x => x.toLowerCase().normalize('NFKD').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const row = o => `<button type="button" class="pk-row ${o.value === sel.value ? 'on' : ''}" data-v="${esc(o.value)}">${esc(o.label)}</button>`;
+  const draw = () => {
+    const q = nm(inp.value);
+    if (!q) {
+      const freq = opts.filter(o => use[o.value]).sort((a, b) => use[b.value] - use[a.value]).slice(0, 8);
+      list.innerHTML = (freq.length ? `<div class="pk-sec">Most used</div>${freq.map(row).join('')}<div class="pk-sec">All categories</div>` : '') + opts.map(row).join('');
+      return;
+    }
+    const words = q.split(' ');
+    const hits = opts.map(o => { const l = nm(o.label), last = nm(o.label.split('›').pop());
+      if (!words.every(w => l.includes(w))) return null;
+      return { o, score: (last.startsWith(q) ? 0 : l.split(' ').some(w => w.startsWith(words[0])) ? 1 : 2) - Math.min(use[o.value] || 0, 50) / 100 }; })
+      .filter(Boolean).sort((a, b) => a.score - b.score).map(h => h.o);
+    list.innerHTML = hits.map(row).join('') || `<div class="empty">No category matches “${esc(inp.value)}”</div>`;
+  };
+  list.onclick = e => { const b = e.target.closest('[data-v]'); if (!b) return; sel.value = b.dataset.v; sel.dispatchEvent(new Event('change', { bubbles: true })); close(); };
+  el.querySelector('.iconbtn').onclick = close;
+  inp.oninput = draw;
+  inp.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } if (e.key === 'Enter') { e.preventDefault(); list.querySelector('[data-v]')?.click(); } };
+  draw(); setTimeout(() => inp.focus(), 50);
+}
+new MutationObserver(muts => {
+  for (const m of muts) {
+    if (m.target.tagName === 'SELECT' && m.target._sync) m.target._sync();        // options replaced on an enhanced select
+    m.addedNodes.forEach(n => n.nodeType === 1 && enhanceCatSelects(n.tagName === 'SELECT' ? n.parentNode : n));
+  }
+}).observe(document.body, { childList: true, subtree: true });
+
 const actions = {
   tab: el => { tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   prevMonth: () => { cursor.setMonth(cursor.getMonth() - 1); render(); },

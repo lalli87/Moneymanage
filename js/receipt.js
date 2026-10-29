@@ -1,3 +1,4 @@
+import { grocerySection, sectionCategory } from './grocery.js';
 // Receipt scanning: on-device OCR (Tesseract.js), parsing, and learned merchant rules.
 // "Training" = every saved expense teaches merchant → account + category.
 import { live, put, get, todayStr } from './model.js';
@@ -113,7 +114,7 @@ export function learn(s, merchant, accountId, categoryId) {
 export const ITEM_HINTS = [
   ['clothing', /\b(shirt|tee|t-?shirt|jeans|pant|pants|short|shorts|sock|socks|dress|skirt|jacket|coat|hoodie|sweater|legging|bra|underwear|brief|boxer|pajama|pyjama|shoe|shoes|boot|boots|sandal|slipper|hat|cap|glove|mitt|scarf|apparel|girls|boys|mens|womens|ladies|kids? ?wear|george|athletic works|no boundaries)(?:e?s)?\b/i],
   ['school', /\b(notebook|note ?book|binder|pencil|pen|pens|crayon|marker|highlighter|eraser|glue|scissor|ruler|folder|paper pad|loose leaf|backpack|lunch ?box|stationery|sharpener|index card|sticky note|post-?it)(?:e?s)?\b/i],
-  ['household', /\b(detergent|bleach|cleaner|lysol|clorox|dish ?soap|dawn|sponge|paper towel|bounty|toilet paper|bathroom tissue|charmin|cottonelle|napkin|garbage bag|trash bag|hefty|glad|foil|plastic wrap|ziploc|storage bag|light ?bulb|battery|batteries|duracell|energizer|laundry|tide|gain|downy|fabric|swiffer|mop|broom|candle|air freshener|container|organizer|hanger|vacuum|filter|kitchen|utensil|mug|plate|bowl|cup|towel|sheet|pillow)(?:e?s)?\b/i],
+  ['household', /\b(detergent|bleach|cleaner|lysol|clorox|dish ?soap|dawn|sponge|paper towel|bounty|toilet paper|bathroom tissue|bath tissue|facial tissue|tissue|kleenex|royale|scotties|charmin|cottonelle|napkin|garbage bag|trash bag|hefty|glad|foil|plastic wrap|ziploc|storage bag|light ?bulb|battery|batteries|duracell|energizer|laundry|tide|gain|downy|fabric|swiffer|mop|broom|candle|air freshener|container|organizer|hanger|vacuum|filter|kitchen|utensil|mug|plate|bowl|cup|towel|sheet|pillow)(?:e?s)?\b/i],
   ['personal', /\b(shampoo|conditioner|body ?wash|soap bar|toothpaste|toothbrush|floss|mouthwash|deodorant|razor|shave|lotion|sunscreen|cosmetic|makeup|lipstick|nail|hair|tampon|pad|diaper|wipes|cotton|q-?tip|colgate|crest|dove|gillette|nivea|vaseline)(?:e?s)?\b/i],
   ['health', /\b(vitamin|tylenol|advil|motrin|aspirin|allergy|reactine|claritin|cough|cold|medicine|pharmacy|rx|bandage|band-?aid|thermometer|supplement|probiotic|omega)(?:e?s)?\b/i],
   ['kids', /\b(toy|toys|lego|barbie|hot wheels|puzzle|game|doll|plush|crayola|play-?doh|nerf|stroller|baby|infant|toddler)(?:e?s)?\b/i],
@@ -140,7 +141,8 @@ export function parseItems(text) {
     if (!m) continue;
     const amt = parseFloat(m[2].replace(/[$\s]/g, '').replace(',', '.')) * (m[3] === '-' || /^-/.test(m[2]) ? -1 : 1);
     const desc = m[1].replace(/^\d{6,}\s*/, '').replace(/\s\d{6,}\b/g, '').trim();
-    if (/\b(hst|gst|pst|qst|tax)\b/i.test(desc) && !/before tax/i.test(desc)) { if (Math.abs(amt) < 1000) tax += amt; continue; }
+    if ((/(h|g|p|q)st\b|\btax\b|\b(5|13|15|9\.975|14\.975)\s?%/i.test(desc)) && !/before tax/i.test(desc)) { if (Math.abs(amt) < 1000) tax += amt; continue; }
+    if (/\b(amount|amt|purchase|approved|change due)\b\s*:?/i.test(desc) && desc.replace(/[^a-z]/gi, '').length <= 12) { total = Math.max(total ?? 0, amt); continue; }
     if (/sub-?\s*total/i.test(desc)) { subtotal = amt; continue; }
     if (/\btotal\b/i.test(desc)) { total = Math.max(total ?? 0, amt); continue; }
     if (NOT_ITEM.test(desc) || desc.length < 2) continue;
@@ -156,15 +158,17 @@ export function classifyItem(s, desc) {
     const r = learned.find(r => r.key === w), c = r && get(s, 'categories', r.categoryId);
     if (c) { const p = c.parentId && get(s, 'categories', c.parentId); return { categoryId: c.id, how: 'learned', group: /grocer/i.test(`${c.name} ${p?.name || ''}`) ? 'groceries' : 'learned' }; }
   }
-  // 2) built-in hints mapped onto your categories
+  // 2) built-in hints mapped onto your categories (non-food first, then the grocery dictionary)
   const cats = live(s, 'categories').filter(c => c.type === 'expense');
-  for (const [group, re] of ITEM_HINTS) if (re.test(' ' + desc + ' ')) {
+  for (const [group, re] of ITEM_HINTS) if (group !== 'groceries' && re.test(' ' + desc + ' ')) {
     for (const name of HINT_CATEGORIES[group] || [group]) {
       const c = cats.find(c => c.name.toLowerCase() === name) || cats.find(c => c.name.toLowerCase().includes(name));
       if (c) return { categoryId: c.id, how: 'hint', group };
     }
     return { categoryId: null, how: 'hint', group };
   }
+  const g = grocerySection(desc) || (ITEM_HINTS.find(([gr]) => gr === 'groceries')[1].test(' ' + desc + ' ') ? { section: null, how: 'hint' } : null);
+  if (g) return { categoryId: sectionCategory(cats, g.section), how: g.how, group: 'groceries' };
   return { categoryId: null, how: 'none' };
 }
 // Remember your correction for the distinctive words of an item line.

@@ -160,3 +160,17 @@ details summary { list-style: none; } details summary::-webkit-details-marker { 
 .lockbox { width: 100%; max-width: 320px; text-align: center; }
 .lockbox h2 { margin: 6px 0 18px; }
 .lockbox input { text-align: center; font-size: 22px; letter-spacing: 6px; }
+
+/* searchable category picker */
+.catpick { width: 100%; text-align: left; font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 30px 10px 10px; margin-top: 4px; position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.catpick::after { content: '⌄'; position: absolute; right: 10px; top: 50%; transform: translateY(-60%); color: var(--mute); }
+.catpick.empty { color: var(--mute); }
+.imp-ctl .catpick, [data-r] .catpick, [data-it] .catpick { margin: 0; padding: 6px 26px 6px 8px; font-size: 13px; }
+#picker { position: fixed; inset: 0; z-index: 45; background: var(--bg); display: flex; flex-direction: column; }
+.pk-head { display: flex; gap: 6px; align-items: center; padding: 12px 12px 8px; padding-top: max(12px, env(safe-area-inset-top)); background: var(--card); border-bottom: 1px solid var(--line); }
+.pk-head input { margin: 0; font-size: 16px; }
+.pk-list { overflow-y: auto; flex: 1; padding-bottom: var(--safe-b); }
+.pk-row { display: block; width: 100%; text-align: left; background: var(--card); border: 0; border-bottom: 1px solid var(--line); padding: 13px 16px; font: inherit; color: var(--ink); }
+.pk-row.on { color: var(--accent); font-weight: 600; }
+.pk-sec { padding: 12px 16px 6px; font-size: 12px; color: var(--mute); text-transform: uppercase; letter-spacing: .04em; }
