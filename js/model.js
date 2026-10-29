@@ -26,11 +26,13 @@ export function emptyState() {
   const now = Date.now();
   const s = { schema: 1, settings: { currency: 'CAD', remindDays: 3, updatedAt: now } };
   COLLECTIONS.forEach(c => (s[c] = []));
-  const g = (name, kind) => { const r = { id: uid(), name, kind, order: s.groups.length, updatedAt: now }; s.groups.push(r); return r; };
+  // Fixed ids for starter records: every device creates the same ones, so syncing never duplicates them.
+  const slug = x => x.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  const g = (name, kind) => { const r = { id: 'def_g_' + slug(name), name, kind, order: s.groups.length, updatedAt: 1 }; s.groups.push(r); return r; };
   const cash = g('Cash', 'asset'); g('Accounts', 'asset'); g('Card', 'card'); g('Loan', 'liability'); g('Investments', 'asset');
-  s.accounts.push({ id: uid(), groupId: cash.id, name: 'Cash', opening: 0, includeInTotals: true, updatedAt: now });
+  s.accounts.push({ id: 'def_a_cash', groupId: cash.id, name: 'Cash', opening: 0, includeInTotals: true, updatedAt: 1 });
   const cat = (type, name, emoji = '', parentId = null) => {
-    const r = { id: uid(), type, name, emoji, parentId, order: s.categories.length, updatedAt: now };
+    const r = { id: `def_c_${type}_${parentId ? parentId.replace(/^def_c_\w+?_/, '') + '_' : ''}${slug(name)}`, type, name, emoji, parentId, order: s.categories.length, updatedAt: 1 };
     s.categories.push(r); return r;
   };
   ['🛒 Groceries', '🍜 Food', '🪑 Household', '🚗 Transport', '🔌 Utilities', '🛡️ Insurance', '📙 Education',
@@ -306,7 +308,8 @@ export function categoryTotals(s, from, to, type, today = todayStr()) {
   const leaf = {}; const add = (id, a) => { const k = id || 'none'; leaf[k] = round2((leaf[k] || 0) + a); };
   for (const t of live(s, 'transactions')) {
     if (t.date < from || t.date > end) continue;
-    if (t.type === type) add(t.categoryId, +t.amount);
+    if (t.type === type && t.splits?.length) t.splits.forEach(x => add(x.categoryId, +x.amount));   // one bill, several categories
+    else if (t.type === type) add(t.categoryId, +t.amount);
     else if (type === 'expense' && t.type === 'mortgage') {
       const m = get(s, 'mortgages', t.mortgageId); const sp = map[t.id];
       if (m && sp) { add(m.interestCategoryId || m.categoryId, sp.interest); add(m.principalCategoryId || m.categoryId, sp.principal); }
@@ -316,6 +319,83 @@ export function categoryTotals(s, from, to, type, today = todayStr()) {
   const top = {};
   for (const id in leaf) { const tid = topCatId(s, id) || id; top[tid] = round2((top[tid] || 0) + leaf[id]); }
   return { leaf, top };
+}
+
+// ---------- duplicate clean-up ----------
+// Merges categories with the same name/type/parent, groups with the same name/kind, and drops unused copies of
+// accounts with the same name in the same group. Everything pointing at a removed copy is moved to the kept one.
+const normName = n => String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+function editDist(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 9;
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+export function dedupe(s) {
+  const now = Date.now(), changed = new Set(), out = { categories: 0, groups: 0, accounts: 0 };
+  const touch = (c, r) => { r.updatedAt = now; changed.add(c); };
+  const used = {};
+  for (const t of live(s, 'transactions')) {
+    [t.categoryId, ...(t.splits || []).map(x => x.categoryId)].forEach(id => id && (used[id] = (used[id] || 0) + 1));
+    [t.accountId, t.toAccountId].forEach(id => id && (used[id] = (used[id] || 0) + 1));
+  }
+  live(s, 'recurring').forEach(r => [r.template?.categoryId, r.template?.accountId, r.template?.toAccountId].forEach(id => id && (used[id] = (used[id] || 0) + 1)));
+  const pick = list => [...list].sort((a, b) => (used[b.id] || 0) - (used[a.id] || 0) || (a.id.startsWith('def_') ? 1 : 0) - (b.id.startsWith('def_') ? 1 : 0) || (a.updatedAt || 0) - (b.updatedAt || 0))[0];
+  const remap = {};
+  // groups
+  const gByKey = new Map();
+  live(s, 'groups').forEach(g => { const k = g.kind + '|' + normName(g.name); (gByKey.get(k) || gByKey.set(k, []).get(k)).push(g); });
+  for (const list of gByKey.values()) if (list.length > 1) {
+    const keep = pick(list);
+    for (const g of list) if (g !== keep) { remap[g.id] = keep.id; g.deleted = true; touch('groups', g); out.groups++; }
+  }
+  live(s, 'accounts').forEach(a => { if (remap[a.groupId]) { a.groupId = remap[a.groupId]; touch('accounts', a); } });
+  // accounts: only remove copies nothing uses
+  const aByKey = new Map();
+  live(s, 'accounts').forEach(a => { const k = a.groupId + '|' + normName(a.name); (aByKey.get(k) || aByKey.set(k, []).get(k)).push(a); });
+  for (const list of aByKey.values()) if (list.length > 1) {
+    const keep = pick(list);
+    for (const a of list) if (a !== keep && !used[a.id] && !(+a.opening) && !live(s, 'mortgages').some(m => m.accountId === a.id)) { a.deleted = true; touch('accounts', a); out.accounts++; }
+  }
+  // categories: top level first, then subcategories under their (kept) parent
+  for (const level of ['top', 'sub']) {
+    const cByKey = new Map();
+    live(s, 'categories').filter(c => (level === 'top') === !c.parentId).forEach(c => {
+      const parent = c.parentId ? (remap[c.parentId] || c.parentId) : '';
+      const k = c.type + '|' + parent + '|' + normName(c.name); (cByKey.get(k) || cByKey.set(k, []).get(k)).push(c);
+    });
+    for (const list of cByKey.values()) if (list.length > 1) {
+      const keep = pick(list);
+      for (const c of list) if (c !== keep) {
+        remap[c.id] = keep.id;
+        ['emoji', 'budget', 'defaultTag'].forEach(f => { if (!keep[f] && c[f]) { keep[f] = c[f]; touch('categories', keep); } });
+        c.deleted = true; touch('categories', c); out.categories++;
+      }
+    }
+    live(s, 'categories').forEach(c => { if (c.parentId && remap[c.parentId]) { c.parentId = remap[c.parentId]; touch('categories', c); } });
+    // Near-duplicates ("Child care benefit" vs "Child care benifit"): only an UNUSED copy is folded into the used one.
+    const lvl = live(s, 'categories').filter(c => (level === 'top') === !c.parentId);
+    for (const c of lvl) {
+      if (c.deleted || used[c.id] || live(s, 'categories').some(x => x.parentId === c.id && used[x.id])) continue;
+      const a = normName(c.name); if (a.length < 5) continue;
+      const twin = lvl.find(x => x !== c && !x.deleted && x.type === c.type && (x.parentId || '') === (c.parentId || '') && used[x.id] && editDist(a, normName(x.name)) <= 2);
+      if (twin) { remap[c.id] = twin.id; c.deleted = true; touch('categories', c); out.categories++; }
+    }
+    live(s, 'categories').forEach(c => { if (c.parentId && remap[c.parentId]) { c.parentId = remap[c.parentId]; touch('categories', c); } });
+  }
+  if (!Object.keys(remap).length && !out.accounts) return out;
+  const fix = id => remap[id] || id;
+  for (const t of live(s, 'transactions')) {
+    let ch = false;
+    if (t.categoryId && remap[t.categoryId]) { t.categoryId = fix(t.categoryId); ch = true; }
+    (t.splits || []).forEach(x => { if (remap[x.categoryId]) { x.categoryId = fix(x.categoryId); ch = true; } });
+    if (ch) touch('transactions', t);
+  }
+  live(s, 'recurring').forEach(r => { if (r.template?.categoryId && remap[r.template.categoryId]) { r.template.categoryId = fix(r.template.categoryId); touch('recurring', r); } });
+  live(s, 'rules').forEach(r => { if (r.categoryId && remap[r.categoryId]) { r.categoryId = fix(r.categoryId); touch('rules', r); } });
+  live(s, 'mortgages').forEach(m => ['categoryId', 'interestCategoryId', 'principalCategoryId'].forEach(f => { if (m[f] && remap[m[f]]) { m[f] = fix(m[f]); touch('mortgages', m); } }));
+  return out;
 }
 
 // ---------- sync merge (last-writer-wins per record, tombstones for deletes) ----------

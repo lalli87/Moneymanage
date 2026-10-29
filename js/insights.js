@@ -247,8 +247,10 @@ export function taxReport(S, year, which, mortgageSplits) {
       const v = round2(sp.interest * f); add(exp, 'Mortgage interest', v); rows.push({ t, label: 'Mortgage interest', v, f }); continue;
     }
     if (t.type !== 'income' && t.type !== 'expense') continue;
-    const label = catLabel(S, t.categoryId), v = round2(+t.amount * f);
-    add(t.type === 'income' ? inc : exp, label, v); rows.push({ t, label, v, f });
+    for (const x of t.splits?.length ? t.splits : [{ categoryId: t.categoryId, amount: t.amount }]) {
+      const label = catLabel(S, x.categoryId), v = round2(+x.amount * f);
+      add(t.type === 'income' ? inc : exp, label, v); rows.push({ t, label, v, f });
+    }
     if (t.hst) { if (t.type === 'income') hstCollected += +t.hst * f; else hstPaid += +t.hst * f; }
   }
   const sum = m => round2(Object.values(m).reduce((a, b) => a + b, 0));
@@ -261,8 +263,10 @@ export function budgetStatus(S, from, to, today = todayStr()) {
   const spent = {};
   for (const t of live(S, 'transactions')) {
     if (t.date < from || t.date > to || t.date > today || t.type !== 'expense') continue;
-    const c = get(S, 'categories', t.categoryId); const top = c ? (c.parentId || c.id) : null;
-    if (top) spent[top] = round2((spent[top] || 0) + +t.amount);
+    for (const x of t.splits?.length ? t.splits : [{ categoryId: t.categoryId, amount: t.amount }]) {
+      const c = get(S, 'categories', x.categoryId); const top = c ? (c.parentId || c.id) : null;
+      if (top) spent[top] = round2((spent[top] || 0) + +x.amount);
+    }
   }
   // Month progress lets "on track" be judged mid-month.
   const d0 = parseYmd(from), dim = daysInMonth(d0.getFullYear(), d0.getMonth());

@@ -53,6 +53,7 @@ async function init() {
   try { vault = await DB.getKV('vault'); } catch {}
   S = M.migrate((await DB.load()) || M.emptyState());
   if (M.materialize(S)) await DB.save(S);
+  const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await DB.save(S); setTimeout(() => toast(`Merged ${dd.categories + dd.groups + dd.accounts} duplicate categories/accounts`), 800); }
   render();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
   if (L.clientId) Sync.loadGis().catch(() => {});
@@ -100,6 +101,7 @@ async function doSync(interactive = true) {
   try {
     S = M.migrate(await Sync.sync(S, L.clientId, interactive, codec));
     M.materialize(S);
+    const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await Sync.sync(S, L.clientId, false, codec).catch(() => {}); }
     await DB.save(S);
     L.lastSync = new Date().toISOString(); saveLocal();
     render();
@@ -170,6 +172,7 @@ function defaultAccount() {
 function txLabel(t) {
   if (t.type === 'transfer') return '↔ Transfer';
   if (t.type === 'mortgage') return t.prepayment ? '🏡 Prepayment' : '🏡 Mortgage';
+  if (t.splits?.length > 1) return `🧩 ${M.catLabel(S, t.splits[0].categoryId).replace(/^\S+\s/, '')} +${t.splits.length - 1}`;
   return M.catLabel(S, t.categoryId);
 }
 function txRow(t, splits = {}) {
@@ -345,6 +348,16 @@ function editTxn(t, preset = {}) {
       <label class="f-acc"><span class="lbl-acc">Account</span><select name="accountId">${accountOptions(t.accountId)}</select></label>
       <label class="f-to">To account<select name="toAccountId">${accountOptions(t.toAccountId, { allowEmpty: true })}</select></label>
       <label class="f-cat">Category<select name="categoryId"></select></label>
+      <div class="f-split">
+        <button type="button" id="splitBtn" class="secondary" style="width:100%;margin-bottom:10px">🧩 Split across categories (mixed bill)</button>
+        <div id="splitBox" class="hidden-f card" style="margin-bottom:10px">
+          <div id="items"></div>
+          <small>Category lines — they must add up to the amount</small>
+          <div id="splitRows"></div>
+          <div class="btnrow" style="padding:6px 0 0"><button type="button" class="secondary" id="addLine">+ Line</button><button type="button" class="secondary" id="usual">Usual split here</button><button type="button" class="secondary" id="noSplit">No split</button></div>
+          <div id="splitMsg" class="hint" style="margin-bottom:0"></div>
+        </div>
+      </div>
       <label class="f-mort">Mortgage<select name="mortgageId">${mortgageOptions(t.mortgageId)}</select></label>
       <label class="f-mort check"><input type="checkbox" name="prepayment" ${t.prepayment ? 'checked' : ''}> Lump-sum prepayment (100% goes to principal)</label>
       <label>Note<input name="note" value="${esc(t.note)}" placeholder="e.g. Costco" autocomplete="off"></label>
@@ -358,6 +371,7 @@ function editTxn(t, preset = {}) {
     </form>`);
   const f = body.querySelector('#f');
   let catTouched = !!t.categoryId;
+  let splits = (t.splits || []).map(x => ({ ...x })), items = null, splitOn = splits.length > 1;
   function applyType() {
     const ty = t.type;
     body.querySelectorAll('#ttype button').forEach(b => b.classList.toggle('on', b.dataset.type === ty));
@@ -366,6 +380,8 @@ function editTxn(t, preset = {}) {
     body.querySelectorAll('.f-mort').forEach(e => e.classList.toggle('hidden-f', ty !== 'mortgage'));
     body.querySelectorAll('.f-scan').forEach(e => e.classList.toggle('hidden-f', ty !== 'expense'));
     body.querySelectorAll('.f-tag').forEach(e => e.classList.toggle('hidden-f', ty === 'transfer'));
+    body.querySelectorAll('.f-split').forEach(e => e.classList.toggle('hidden-f', ty !== 'expense'));
+    body.querySelectorAll('.f-cat').forEach(e => e.classList.toggle('hidden-f', ty === 'transfer' || ty === 'mortgage' || (ty === 'expense' && splitOn)));
     body.querySelector('.lbl-acc').textContent = ty === 'transfer' ? 'From account' : ty === 'mortgage' ? 'Paid from' : 'Account';
     f.categoryId.innerHTML = categoryOptions(ty === 'income' ? 'income' : 'expense', t.categoryId);
   }
@@ -381,6 +397,55 @@ function editTxn(t, preset = {}) {
     if (sg.accountId) f.accountId.value = sg.accountId;
   };
   applyType(); futureHint();
+
+  // ---- split one bill across categories (from receipt items or by hand) ----
+  const box = body.querySelector('#splitBox');
+  const amt = () => parseFloat(f.amount.value) || 0;
+  function renderSplit() {
+    box.classList.toggle('hidden-f', !splitOn);
+    body.querySelector('#splitBtn').classList.toggle('hidden-f', splitOn);
+    body.querySelectorAll('.f-cat').forEach(e => e.classList.toggle('hidden-f', t.type !== 'expense' || splitOn));
+    body.querySelector('#splitRows').innerHTML = splits.map((x, i) => `<div style="display:grid;grid-template-columns:1fr 96px 34px;gap:6px;align-items:center" data-r="${i}">
+      <select data-k="cat">${categoryOptions('expense', x.categoryId)}</select><input data-k="amt" type="number" step="0.01" inputmode="decimal" value="${x.amount}" style="margin-top:4px">
+      <button type="button" class="secondary" data-k="x" style="padding:8px 0;margin-top:4px" aria-label="Remove line">✕</button></div>`).join('');
+    const left = M.round2(amt() - splits.reduce((a, x) => a + (+x.amount || 0), 0));
+    body.querySelector('#splitMsg').innerHTML = Math.abs(left) < 0.005 ? '✅ Adds up to the total' : `<span class="exp">${left > 0 ? fmt(left) + ' not assigned yet' : fmt(-left) + ' more than the total'}</span>`;
+  }
+  function renderItems() {
+    const el = body.querySelector('#items');
+    if (!items?.length) return (el.innerHTML = '');
+    el.innerHTML = `<small>${items.length} items on the receipt — change any category and the split updates (and is remembered next time)</small>` +
+      items.map((it, i) => `<div style="display:grid;grid-template-columns:1fr 70px;gap:4px 8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)" data-it="${i}">
+        <span style="font-size:13px">${esc(it.desc)}</span><span style="text-align:right;font-size:13px">${fmt(it.amount)}</span>
+        <select data-k="icat" style="grid-column:1/3;margin:0;padding:6px;font-size:13px">${categoryOptions('expense', it.categoryId)}</select></div>`).join('');
+  }
+  const rebuildFromItems = () => { splits = R.buildSplits(items, amt()); renderSplit(); };
+  body.querySelector('#splitBtn').onclick = () => {
+    splitOn = true;
+    if (!splits.length) splits = [{ categoryId: f.categoryId.value || '', amount: amt() }, { categoryId: '', amount: 0 }];
+    renderSplit();
+  };
+  body.querySelector('#addLine').onclick = () => { const left = M.round2(amt() - splits.reduce((a, x) => a + (+x.amount || 0), 0)); splits.push({ categoryId: '', amount: Math.max(0, left) }); renderSplit(); };
+  body.querySelector('#noSplit').onclick = () => { splitOn = false; if (splits[0]?.categoryId) { f.categoryId.value = splits[0].categoryId; t.categoryId = splits[0].categoryId; } splits = []; items = null; renderItems(); renderSplit(); };
+  body.querySelector('#usual').onclick = () => {
+    const key = R.merchantKey(f.note.value); const tot = {}; let n = 0;
+    M.live(S, 'transactions').filter(x => x.splits?.length > 1 && x.id !== t.id && R.merchantKey(x.note) === key && key).forEach(x => { n++; x.splits.forEach(p => (tot[p.categoryId] = (tot[p.categoryId] || 0) + p.amount / x.amount)); });
+    if (!n) return toast('No earlier split bills at this store yet');
+    const ids = Object.keys(tot); let acc = 0;
+    splits = ids.map((id, i) => { const v = i === ids.length - 1 ? M.round2(amt() - acc) : M.round2(amt() * tot[id] / n); acc += v; return { categoryId: id, amount: v }; });
+    renderSplit(); toast(`Average of your last ${n} split bill${n > 1 ? 's' : ''} here`);
+  };
+  box.addEventListener('change', e => {
+    const r = e.target.closest('[data-r]'), it = e.target.closest('[data-it]');
+    if (it) { const x = items[+it.dataset.it]; x.categoryId = e.target.value; x.changed = true; return rebuildFromItems(); }
+    if (!r) return; const x = splits[+r.dataset.r];
+    if (e.target.dataset.k === 'cat') x.categoryId = e.target.value;
+    if (e.target.dataset.k === 'amt') x.amount = M.round2(+e.target.value || 0);
+    renderSplit();
+  });
+  box.addEventListener('click', e => { const b = e.target.closest('[data-k="x"]'); if (b) { splits.splice(+b.closest('[data-r]').dataset.r, 1); renderSplit(); } });
+  f.amount.addEventListener('change', () => { if (!splitOn) return; if (items) rebuildFromItems(); else renderSplit(); });
+  renderSplit();
 
   // receipt scanning
   const msg = s => (body.querySelector('#scanMsg').textContent = s);
@@ -399,8 +464,16 @@ function editTxn(t, preset = {}) {
       if (sg.categoryId) { f.categoryId.value = sg.categoryId; t.categoryId = sg.categoryId; catTouched = true; }
       f.desc.value = text.split('\n').filter(Boolean).slice(0, 12).join('\n');
       futureHint();
+      const pi = R.parseItems(text);
+      if (pi.items.length >= 2) {
+        items = pi.items.map(i => ({ ...i, ...R.classifyItem(S, i.desc) }));
+        const cats = new Set(items.map(i => i.categoryId || '?'));
+        if (cats.size > 1 || cats.has('?')) { splitOn = true; renderItems(); rebuildFromItems(); }
+        else { const only = [...cats][0]; f.categoryId.value = only; t.categoryId = only; catTouched = true; }
+      }
       const found = [r.total ? 'total' : null, r.date ? 'date' : null, r.merchant ? 'store' : null].filter(Boolean).join(', ') || 'nothing clear';
       body.querySelector('#scanMsg').className = 'hint ok';
+      if (items && splitOn) msg(`Read ${found} and ${items.length} items in ${new Set(items.map(i => i.categoryId).filter(Boolean)).size} categories — check the split below.`); else
       msg(sg.rule ? `Read ${found}. Recognised “${sg.rule.merchant}” (learned from ${sg.rule.hits} receipt${sg.rule.hits > 1 ? 's' : ''}) — check and save.`
         : `Read ${found}. New store — pick the account & category once and I’ll remember them.`);
     } catch (err) { msg('Could not read receipt: ' + err.message); }
@@ -417,6 +490,16 @@ function editTxn(t, preset = {}) {
     };
     rec.toAccountId = t.type === 'transfer' ? f.toAccountId.value : undefined;
     rec.categoryId = t.type === 'expense' || t.type === 'income' ? f.categoryId.value : undefined;
+    rec.splits = undefined;
+    if (t.type === 'expense' && splitOn) {
+      const lines = splits.filter(x => x.categoryId && +x.amount);
+      const left = M.round2(M.round2(amount) - lines.reduce((a, x) => a + +x.amount, 0));
+      if (lines.some(x => !x.categoryId) || splits.some(x => +x.amount && !x.categoryId)) return toast('Pick a category for every split line');
+      if (Math.abs(left) >= 0.01) return toast(`Split lines must add up to the amount (${left > 0 ? fmt(left) + ' left' : fmt(-left) + ' over'})`, 4000);
+      if (lines.length > 1) { rec.splits = lines.map(x => ({ categoryId: x.categoryId, amount: M.round2(+x.amount) })).sort((a, b) => b.amount - a.amount); rec.categoryId = rec.splits[0].categoryId; }
+      else if (lines.length === 1) rec.categoryId = lines[0].categoryId;
+      (items || []).filter(i => i.changed && i.categoryId).forEach(i => R.learnItem(S, i.desc, i.categoryId));
+    }
     rec.mortgageId = t.type === 'mortgage' ? f.mortgageId.value : undefined;
     rec.prepayment = t.type === 'mortgage' ? f.prepayment.checked : undefined;
     rec.tag = t.type !== 'transfer' && f.tag.value ? f.tag.value : undefined;
@@ -672,7 +755,10 @@ function listCategories(type = 'expense') {
   const body = openSheet('Categories', `<div class="seg" id="ct"><button data-t="income" class="${type === 'income' ? 'on' : ''}">Income</button><button data-t="expense" class="${type === 'expense' ? 'on' : ''}">Expenses</button></div>
     <div class="list">${cats.filter(c => !c.parentId).map(p => `<div class="li" data-cat="${p.id}"><div class="grow">${esc((p.emoji || '') + ' ' + p.name)}</div><span class="chev">›</span></div>` +
       cats.filter(c => c.parentId === p.id).map(c => `<div class="li" data-cat="${c.id}" style="padding-left:40px"><div class="grow">↳ ${esc(c.name)}</div><span class="chev">›</span></div>`).join('')).join('')}</div>
-    <div class="row"><button class="primary" id="add">+ Add category</button></div>`);
+    <div class="row"><button class="primary" id="add">+ Add category</button></div>
+    <div class="btnrow" style="padding:8px 0 0"><button class="secondary" id="pack">✨ Add suggested categories</button><button class="secondary" id="dd">🧹 Merge duplicates</button></div>`);
+  body.querySelector('#pack').onclick = () => suggestedCategories(type);
+  body.querySelector('#dd').onclick = () => { const r = M.dedupe(S); commit(); toast(r.categories ? `Merged ${r.categories} duplicate categor${r.categories === 1 ? 'y' : 'ies'}` : 'No duplicates found'); listCategories(type); };
   body.querySelector('#ct').onclick = e => { const b = e.target.closest('button'); if (b) listCategories(b.dataset.t); };
   body.querySelectorAll('[data-cat]').forEach(el => (el.onclick = () => editCategory(M.get(S, 'categories', el.dataset.cat), type)));
   body.querySelector('#add').onclick = () => editCategory(null, type);
@@ -901,7 +987,7 @@ function showStatsCat(topId) {
   const { leaf } = M.categoryTotals(S, from, to, statsType);
   const rows = Object.entries(leaf).filter(([id]) => (M.topCatId(S, id) || id) === topId).sort((a, b) => b[1] - a[1]);
   const tx = M.live(S, 'transactions').filter(t => t.date >= from && t.date <= to && t.date <= today() &&
-    ((t.type === statsType && (M.topCatId(S, t.categoryId) || t.categoryId || 'none') === topId) ||
+    ((t.type === statsType && (t.splits?.length ? t.splits.map(x => x.categoryId) : [t.categoryId]).some(id => (M.topCatId(S, id) || id || 'none') === topId)) ||
      (statsType === 'expense' && t.type === 'mortgage' && M.get(S, 'mortgages', t.mortgageId)?.categoryId === topId)))
     .sort((a, b) => b.date.localeCompare(a.date));
   const { map } = M.mortgageSplits(S);
@@ -1591,6 +1677,67 @@ function accountDetail(id, view = L.accView || 'daily', anchor) {
   body.querySelectorAll('[data-tx]').forEach(el => (el.onclick = () => editTxn(M.get(S, 'transactions', el.dataset.tx))));
   body.querySelector('#addHere').onclick = () => editTxn(null, { accountId: id });
   body.querySelector('#editAcc').onclick = () => editAccount(a);
+}
+
+// ---------- suggested categories (adds only what you don't already have) ----------
+const CATEGORY_PACK = {
+  expense: [
+    ['🛒', 'Groceries', ['Produce', 'Meat & fish', 'Dairy & eggs', 'Bakery', 'Snacks & drinks', 'Indian groceries']],
+    ['🍽️', 'Dining out', ['Restaurants', 'Coffee & tea', 'Fast food', 'Food delivery']],
+    ['🏠', 'Home', ['Property tax', 'Home insurance', 'Maintenance & repairs', 'Furniture & décor', 'Appliances', 'Garden']],
+    ['🔌', 'Utilities', ['Hydro', 'Water & gas', 'Internet', 'Mobile phone']],
+    ['🧴', 'Household supplies', ['Cleaning', 'Paper & kitchen', 'Laundry', 'Dollar store']],
+    ['👕', 'Clothing', ['Adults', 'Kids', 'Shoes']],
+    ['💊', 'Health', ['Pharmacy', 'Dental', 'Vision', 'Fitness']],
+    ['💅', 'Personal care', ['Haircut & salon', 'Toiletries']],
+    ['🚗', 'Car', ['EV charging', 'Car insurance', 'Maintenance & tires', 'Parking & tolls', 'Licence & registration']],
+    ['🚕', 'Rides & transit', ['Uber & taxi', 'Transit']],
+    ['👶', 'Kids', ['Childcare', 'Activities & classes', 'School supplies', 'Toys']],
+    ['📚', 'Education', ['Tuition', 'Books & supplies', 'Courses & certifications']],
+    ['💻', 'Tech & subscriptions', ['Software & apps', 'Streaming', 'Cloud storage', 'Electronics']],
+    ['🎁', 'Gifts & donations', ['Gifts', 'Donations']],
+    ['✈️', 'Travel', ['Flights', 'Hotels', 'Travel spending']],
+    ['🎉', 'Entertainment', ['Events & outings', 'Hobbies', 'Games']],
+    ['🐾', 'Pets', []],
+    ['🏘️', 'Rental unit', ['Repairs & maintenance', 'Supplies', 'Advertising', 'Legal & fees'], 'rental'],
+    ['💼', 'Business expenses', ['Office supplies', 'Software', 'Professional fees', 'Bank fees'], 'business'],
+    ['🧾', 'Fees & interest', ['Bank fees', 'Card interest', 'Government fees', 'Income tax']],
+  ],
+  income: [
+    ['💰', 'Salary', []], ['🏘️', 'Rental income', [], 'rental'], ['💼', 'Business income', [], 'business'], ['👶', 'Canada Child Benefit', []],
+    ['📈', 'Interest & dividends', []], ['💸', 'Cashback & rewards', []], ['🎁', 'Gifts received', []], ['↩️', 'Refunds', []], ['➕', 'Other income', []],
+  ],
+};
+// Names you may already use for the same thing — subcategories go under yours instead of a near-duplicate.
+const CATEGORY_SYNONYMS = { 'dining out': ['food', 'restaurants', 'eating out'], 'household supplies': ['household'], clothing: ['apparel', 'clothes'], car: ['transport', 'transportation', 'vehicle', 'auto'],
+  entertainment: ['culture', 'fun'], 'fees & interest': ['fees & taxes', 'fees', 'bank charges'], 'gifts & donations': ['gifts'], 'canada child benefit': ['child care benefit', 'ccb', 'child benefit'],
+  'interest & dividends': ['interest earned', 'interest'], 'other income': ['other'], health: ['medical'], 'tech & subscriptions': ['subscriptions'], 'rental unit': ['rental expenses'] };
+const nn = x => String(x || '').toLowerCase().replace(/[^a-z0-9&]+/g, ' ').trim();
+function suggestedCategories(type = 'expense') {
+  const mine = M.live(S, 'categories').filter(c => c.type === type);
+  const findTop = name => mine.find(c => !c.parentId && (nn(c.name) === nn(name) || (CATEGORY_SYNONYMS[nn(name)] || []).includes(nn(c.name))));
+  const plan = [];
+  for (const [emoji, name, subs, tag] of CATEGORY_PACK[type]) {
+    const top = findTop(name);
+    const missingSubs = subs.filter(sb => !mine.some(c => c.parentId === top?.id && nn(c.name) === nn(sb)) && !(top && mine.some(c => nn(c.name) === nn(sb))));
+    if (!top || missingSubs.length) plan.push({ emoji, name, top, subs: missingSubs, tag });
+  }
+  const body = openSheet('Suggested categories', `
+    <div class="hint">Only categories you don't have yet. Where you already have a matching one (e.g. your “Apparel” for Clothing), the new subcategories go under it.</div>
+    <div class="list">${plan.map((p, i) => `<label class="li check" style="display:flex;align-items:flex-start;gap:10px;margin:0"><input type="checkbox" data-i="${i}" checked style="margin-top:3px">
+      <div class="grow">${p.top ? `${esc((p.top.emoji || '') + ' ' + p.top.name)} <span class="pill">yours</span>` : `${p.emoji} ${esc(p.name)}`}${p.tag && !p.top ? ` <span class="pill">${p.tag}</span>` : ''}
+      <small>${p.subs.length ? '+ ' + p.subs.map(esc).join(', ') : 'new category'}</small></div></label>`).join('') || '<div class="empty">You already have all of them 👍</div>'}</div>
+    ${plan.length ? '<div class="sticky-bar"><button class="primary" id="go" style="width:100%">Add selected</button></div>' : ''}`);
+  body.querySelector('#go')?.addEventListener('click', () => {
+    let n = 0;
+    body.querySelectorAll('input[data-i]:checked').forEach(cb => {
+      const p = plan[+cb.dataset.i];
+      const top = p.top || M.put(S, 'categories', { id: M.uid(), type, name: p.name, emoji: p.emoji, parentId: null, order: S.categories.length, defaultTag: p.tag });
+      if (!p.top) n++;
+      p.subs.forEach(sb => { M.put(S, 'categories', { id: M.uid(), type, name: sb, emoji: '', parentId: top.id, order: S.categories.length }); n++; });
+    });
+    commit(); toast(`Added ${n} categor${n === 1 ? 'y' : 'ies'}`); listCategories(type);
+  });
 }
 
 // ---------- events ----------

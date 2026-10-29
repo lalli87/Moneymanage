@@ -122,3 +122,9 @@ This repository contains only the app's code. Your data lives on your devices an
   - Google, or anyone who gets into your Google account, sees only ciphertext.
   - Each device asks for the passphrase once and keeps a non-exportable key.
   - The passphrase is never stored or uploaded. If you lose it, the Drive copies can't be recovered.
+
+## Mixed bills (split categories)
+- **One transaction, several categories:** a single transaction can be split across categories, for example a Walmart bill that's part groceries and part clothes. Accounts and statements still show one transaction for the full amount. Stats, budgets and reports count each part in its own category.
+- **Scanning a receipt** reads its item lines and suggests a category for each one. HST goes on taxable items only, so basic groceries stay tax-free. Correct an item once and the app remembers that word next time.
+- **Splitting by hand:** use "🧩 Split across categories" in the editor, or "Usual split here" to reuse your average split at that store.
+- **Categories:** duplicate categories (same name) are merged automatically. "Add suggested categories" adds a full set with icons, without duplicating what you have.
