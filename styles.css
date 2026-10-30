@@ -174,3 +174,5 @@ details summary { list-style: none; } details summary::-webkit-details-marker { 
 .pk-row { display: block; width: 100%; text-align: left; background: var(--card); border: 0; border-bottom: 1px solid var(--line); padding: 13px 16px; font: inherit; color: var(--ink); }
 .pk-row.on { color: var(--accent); font-weight: 600; }
 .pk-sec { padding: 12px 16px 6px; font-size: 12px; color: var(--mute); text-transform: uppercase; letter-spacing: .04em; }
+.iconbtn { position: relative; }
+.iconbtn.pending::after { content: ''; position: absolute; top: 4px; right: 4px; width: 9px; height: 9px; border-radius: 50%; background: #e5484d; border: 2px solid var(--bg, #fff); }

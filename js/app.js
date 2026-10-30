@@ -33,9 +33,13 @@ function commit() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     await DB.save(S);
+    if (L.clientId) { L.pending = true; saveLocal(); showPending(); }
     if (Sync.hasToken()) doSync(false).catch(() => {});
+    else if (L.clientId && !showPending.told) { showPending.told = true; toast('Saved on this device — tap ⟳ to send it to your other devices', 4000); }
   }, 500);
 }
+// Red dot on ⟳ while this device has changes that haven't reached Google Drive yet.
+function showPending() { $('#syncBtn')?.classList.toggle('pending', !!(L.clientId && L.pending)); }
 
 // ---------- boot ----------
 // ---------- theme (per device): 'system' | 'light' | 'dark' ----------
@@ -66,7 +70,7 @@ async function init() {
   if (M.materialize(S) | autoCycles()) await DB.save(S);
   // With sync on, clean up duplicates only after merging the latest from Drive (doSync), never on stale data.
   if (!L.clientId) { const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await DB.save(S); setTimeout(() => toast(`Merged ${dd.categories + dd.groups + dd.accounts} duplicate categories/accounts`), 800); } }
-  render();
+  render(); showPending();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
   if (L.clientId) Sync.loadGis().catch(() => {});
   notifyUpcoming();
@@ -115,7 +119,7 @@ async function doSync(interactive = true) {
     M.materialize(S);
     const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts | autoCycles()) { await Sync.sync(S, L.clientId, false, codec).catch(() => {}); }
     await DB.save(S);
-    L.lastSync = new Date().toISOString(); saveLocal();
+    L.lastSync = new Date().toISOString(); L.pending = false; saveLocal(); showPending();
     render();
     Sync.weeklyBackup(S, L.clientId, { codec }).then(n => n && interactive && toast('Weekly backup saved to Drive')).catch(() => {});
     if (interactive) toast(vault ? 'Synced (end-to-end encrypted) ✓' : 'Synced with Google Drive ✓');
@@ -322,7 +326,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.29-h';
+const APP_VERSION = '2026.10.29-i';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
