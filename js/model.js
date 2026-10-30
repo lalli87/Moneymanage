@@ -357,7 +357,10 @@ export function dedupe(s) {
   live(s, 'accounts').forEach(a => { const k = a.groupId + '|' + normName(a.name); (aByKey.get(k) || aByKey.set(k, []).get(k)).push(a); });
   for (const list of aByKey.values()) if (list.length > 1) {
     const keep = pick(list);
-    for (const a of list) if (a !== keep && !used[a.id] && !(+a.opening) && !live(s, 'mortgages').some(m => m.accountId === a.id)) { a.deleted = true; touch('accounts', a); out.accounts++; }
+    for (const a of list) if (a !== keep && !used[a.id] && !(+a.opening) && !live(s, 'mortgages').some(m => m.accountId === a.id)) {
+      Object.assign(keep, keepHistory('accounts', keep, a)); touch('accounts', keep);   // never lose statement history with the copy
+      a.deleted = true; touch('accounts', a); out.accounts++;
+    }
   }
   // categories: top level first, then subcategories under their (kept) parent
   for (const level of ['top', 'sub']) {
@@ -404,12 +407,23 @@ export function dedupe(s) {
 // so a newer edit elsewhere on the record can never wipe it.
 const byKey = (list, key) => { const m = new Map(); for (const x of list) { const k = key(x); m.set(k, { ...(m.get(k) || {}), ...x }); } return [...m.values()]; };
 const unionList = (x, y, key) => (x?.length || y?.length) ? byKey([...(y || []), ...(x || [])], key) : x;
+// Card statements: a real statement (imported or typed) replaces the app's own estimated one ("auto")
+// for the same cycle — anything within 6 days of it. Keeps the newest 24.
+const dayNo = d => Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)) / 864e5;
+export function tidyCycles(list) {
+  if (!list?.length) return list;
+  const real = list.filter(c => !c.auto);
+  const auto = list.filter(c => c.auto && !real.some(r => Math.abs(dayNo(r.statementDate) - dayNo(c.statementDate)) <= 6))
+    .sort((p, q) => q.statementDate.localeCompare(p.statementDate))
+    .filter((c, i, arr) => !arr.slice(0, i).some(o => Math.abs(dayNo(o.statementDate) - dayNo(c.statementDate)) <= 6));
+  return [...real, ...auto].sort((p, q) => p.statementDate.localeCompare(q.statementDate)).slice(-24);
+}
 function keepHistory(c, win, lose) {
   if (!lose || win.deleted) return win;
   const r = { ...win };
   if (c === 'accounts') {
     r.cycles = unionList(win.cycles, lose.cycles, x => x.statementDate);
-    if (r.cycles) r.cycles = r.cycles.sort((p, q) => p.statementDate.localeCompare(q.statementDate)).slice(-24);
+    if (r.cycles) r.cycles = tidyCycles(r.cycles);
     r.plans = unionList(win.plans, lose.plans, x => `${x.start}|${x.original}`);
     for (const f of ['importSigs', 'statementLabels']) if (win[f] || lose[f]) r[f] = [...new Set([...(win[f] || []), ...(lose[f] || [])])];
     if (lose.numbers && !win.numbers) r.numbers = lose.numbers;

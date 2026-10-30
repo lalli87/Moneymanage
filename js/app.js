@@ -52,7 +52,7 @@ async function init() {
   showLock();
   try { vault = await DB.getKV('vault'); } catch {}
   S = M.migrate((await DB.load()) || M.emptyState());
-  if (M.materialize(S)) await DB.save(S);
+  if (M.materialize(S) | autoCycles()) await DB.save(S);
   // With sync on, clean up duplicates only after merging the latest from Drive (doSync), never on stale data.
   if (!L.clientId) { const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await DB.save(S); setTimeout(() => toast(`Merged ${dd.categories + dd.groups + dd.accounts} duplicate categories/accounts`), 800); } }
   render();
@@ -102,7 +102,7 @@ async function doSync(interactive = true) {
   try {
     S = M.migrate(await Sync.sync(S, L.clientId, interactive, codec));
     M.materialize(S);
-    const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await Sync.sync(S, L.clientId, false, codec).catch(() => {}); }
+    const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts | autoCycles()) { await Sync.sync(S, L.clientId, false, codec).catch(() => {}); }
     await DB.save(S);
     L.lastSync = new Date().toISOString(); saveLocal();
     render();
@@ -311,7 +311,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.29-e';
+const APP_VERSION = '2026.10.29-f';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1204,7 +1204,21 @@ function upsertCycle(a, c) {
   const list = (a.cycles || []).filter(x => x.statementDate !== c.statementDate);
   const old = (a.cycles || []).find(x => x.statementDate === c.statementDate) || {};
   const merged = { ...old }; Object.entries(c).forEach(([k, v]) => { if (v != null) merged[k] = v; });
-  a.cycles = [...list, merged].sort((x, y) => x.statementDate.localeCompare(y.statementDate)).slice(-24);
+  if (!c.auto) delete merged.auto;                 // a real statement always wins over the estimate
+  a.cycles = M.tidyCycles([...list, merged]);
+}
+// Once a card's statement date passes, record that cycle (statement + due date) from the learned pattern, so
+// the payable stays until it is paid and the history is kept on every device. A real statement replaces it.
+function autoCycles() {
+  let n = 0; const t = today();
+  for (const a of M.live(S, 'accounts')) {
+    if (M.get(S, 'groups', a.groupId)?.kind !== 'card' || a.hidden) continue;
+    const pc = X.predictCycle(a, t); if (!pc || pc.last > t) continue;
+    const near = (a.cycles || []).some(c => Math.abs(Date.parse(pc.last) - Date.parse(c.statementDate)) / 864e5 <= 6);
+    if (near) continue;
+    upsertCycle(a, { statementDate: pc.last, dueDate: pc.lastDue, auto: true }); M.put(S, 'accounts', a); n++;
+  }
+  return n;
 }
 
 // ---------- mortgage documents (statements, annual statements, amortization schedule) ----------
