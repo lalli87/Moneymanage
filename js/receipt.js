@@ -134,19 +134,35 @@ export const HINT_CATEGORIES = {
 };
 const NOT_ITEM = /sub-?\s*total|\btotal\b|\btax\b|\bhst\b|\bgst\b|\bpst\b|\bqst\b|change|cash|visa|master|debit|credit|amex|tend|payment|balance|saving|you saved|discount|coupon|points|rewards|approved|auth|ref\b|tran|account|card ?#|items? sold|thank/i;
 export function parseItems(text) {
-  const items = []; let tax = 0, subtotal = null, total = null;
+  const items = []; let tax = 0, subtotal = null, total = null, pending = null;
+  const PRICE = /(-?\$?\d{1,4}\.\d{2})\s*(-|[A-Z]{1,3})?$/;
   for (const raw of text.split(/\r?\n/)) {
-    const l = raw.replace(/\s+/g, ' ').trim(); if (!l) continue;
-    const m = l.match(/^(.*?[A-Za-z].*?)\s+(-?\$?\d{1,4}[.,]\d{2})\s*(-|[A-Z]{1,3})?$/);   // "GV MILK 2L 5.49 J" / "SOCKS 6PK 9.97"
-    if (!m) continue;
-    const amt = parseFloat(m[2].replace(/[$\s]/g, '').replace(',', '.')) * (m[3] === '-' || /^-/.test(m[2]) ? -1 : 1);
+    // tidy OCR: "12 .99" / "12, 99" → "12.99"; "3.00 -" → "3.00-"
+    const l = raw.replace(/\s+/g, ' ').trim().replace(/(\d)\s?[.,]\s?(\d{2})(?=\s*(-|[A-Z]{1,3})?$)/, '$1.$2').replace(/(\d\.\d{2})\s+-$/, '$1-');
+    if (!l) continue;
+    let m = l.match(new RegExp('^(.*?[A-Za-z].*?)\\s+' + PRICE.source));
+    if (!m) {
+      const p = l.match(new RegExp('^' + PRICE.source));
+      if (p && pending) m = [l, pending, p[1], p[2]];          // name on one line, price on the next
+      else { pending = /[A-Za-z]{3}/.test(l) && !/\d+\.\d{2}/.test(l) && !NOT_ITEM.test(l) ? l : null; continue; }
+    }
+    pending = null;
+    const amt = parseFloat(m[2].replace(/[$\s]/g, '')) * (m[3] === '-' || /^-/.test(m[2]) ? -1 : 1);
     const desc = m[1].replace(/^\d{6,}\s*/, '').replace(/\s\d{6,}\b/g, '').trim();
-    if ((/(h|g|p|q)st\b|\btax\b|\b(5|13|15|9\.975|14\.975)\s?%/i.test(desc)) && !/before tax/i.test(desc)) { if (Math.abs(amt) < 1000) tax += amt; continue; }
-    if (/\b(amount|amt|purchase|approved|change due)\b\s*:?/i.test(desc) && desc.replace(/[^a-z]/gi, '').length <= 12) { total = Math.max(total ?? 0, amt); continue; }
+    const letters = desc.replace(/[^a-z]/gi, '');
+    if (((/(h|g|p|q)st\b|\btax\b|\b(5|13|15|9\.975|14\.975)\s?%/i.test(desc)) || /^[t1il]?ax$/i.test(letters)) && !/before tax/i.test(desc)) { if (Math.abs(amt) < 1000) tax += amt; continue; }
+    if (/\b(amount|amt|purchase|approved|change due)\b\s*:?/i.test(desc) && letters.length <= 12) { total = Math.max(total ?? 0, amt); continue; }
     if (/sub-?\s*total/i.test(desc)) { subtotal = amt; continue; }
     if (/\btotal\b/i.test(desc)) { total = Math.max(total ?? 0, amt); continue; }
-    if (NOT_ITEM.test(desc) || desc.length < 2) continue;
-    items.push({ desc, amount: Math.round(amt * 100) / 100 });
+    // Discounts (Costco "TPD/1234567 3.00-", instant savings, coupons) come right after their item: take them off it.
+    const isDisc = amt < 0 || /\b(tpd|inst(ant)?\s*sav\w*|savings?|discount|disc|coupon|cpn|promo|rebate|mfr)\b/i.test(desc);
+    if (isDisc) {
+      const prev = items[items.length - 1], off = Math.abs(amt);
+      if (prev && off < prev.amount) { prev.amount = Math.round((prev.amount - off) * 100) / 100; prev.discount = Math.round(((prev.discount || 0) + off) * 100) / 100; }
+      continue;
+    }
+    if (NOT_ITEM.test(desc) || letters.length < 2) continue;
+    items.push({ desc: desc.replace(/^.{0,12}?\d{4,7}\s+(?=[A-Za-z])/, '').replace(/^[^A-Za-z0-9]+/, '').trim() || desc, amount: Math.round(amt * 100) / 100 });
   }
   return { items, tax: Math.round(tax * 100) / 100, subtotal, total };
 }

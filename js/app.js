@@ -47,6 +47,17 @@ function applyTheme() {
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 
+// Money fields accept only digits and one dot (2 decimals; 3 for rates; a leading minus where a balance can be negative).
+function cleanMoney(v, mode) {
+  let neg = mode === 'signed' && /^\s*-/.test(v);
+  v = String(v).replace(/,/g, '.').replace(/[^0-9.]/g, '');
+  const i = v.indexOf('.'); if (i >= 0) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/\./g, '').slice(0, mode === 'rate' ? 3 : 2);
+  return (neg ? '-' : '') + v;
+}
+document.addEventListener('input', e => {
+  const el = e.target; if (!el.matches?.('input[data-money]')) return;
+  const c = cleanMoney(el.value, el.dataset.money); if (c !== el.value) el.value = c;
+}, true);
 async function init() {
   applyTheme();
   showLock();
@@ -311,7 +322,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.29-f';
+const APP_VERSION = '2026.10.29-g';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -356,7 +367,7 @@ function editTxn(t, preset = {}) {
       <div class="f-scan"><button type="button" id="scanBtn" class="secondary" style="width:100%">📷 Scan receipt</button>
         <input type="file" id="scanFile" accept="image/*" capture="environment" hidden><div id="scanMsg" class="hint"></div></div>
       <div class="two"><label>Date<input type="date" name="date" value="${t.date}" required></label>
-      <label>Amount<input type="number" step="0.01" min="0" inputmode="decimal" name="amount" value="${t.amount}" required></label></div>
+      <label>Amount<input type="text" inputmode="decimal" data-money autocomplete="off" name="amount" value="${t.amount}" required></label></div>
       <label class="f-acc"><span class="lbl-acc">Account</span><select name="accountId">${accountOptions(t.accountId)}</select></label>
       <label class="f-to">To account<select name="toAccountId">${accountOptions(t.toAccountId, { allowEmpty: true })}</select></label>
       <label class="f-cat">Category<select name="categoryId"></select></label>
@@ -375,7 +386,7 @@ function editTxn(t, preset = {}) {
       <label>Note<input name="note" value="${esc(t.note)}" placeholder="e.g. Costco" autocomplete="off"></label>
       <label>Description<textarea name="desc">${esc(t.desc)}</textarea></label>
       <div class="two f-tag"><label>Purpose<select name="tag"><option value="">Auto${X.tagOf(S, { ...t, tag: undefined }) ? ' (' + esc(X.TAGS[X.tagOf(S, { ...t, tag: undefined })]) + ')' : ' (personal)'}</option>${Object.entries(X.TAGS).map(([k, v]) => `<option value="${k}" ${t.tag === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
-      <label>HST included<span style="display:flex;gap:6px"><input type="number" step="0.01" min="0" name="hst" value="${t.hst || ''}" placeholder="optional"><button type="button" id="hstBtn" class="secondary" style="padding:0 10px;margin-top:4px">${S.settings.hstRate ?? 13}%</button></span></label></div>
+      <label>HST included<span style="display:flex;gap:6px"><input type="text" inputmode="decimal" data-money autocomplete="off" name="hst" value="${t.hst || ''}" placeholder="optional"><button type="button" id="hstBtn" class="secondary" style="padding:0 10px;margin-top:4px">${S.settings.hstRate ?? 13}%</button></span></label></div>
       ${isNew ? `<label>Repeat<select name="repeat"><option value="">Don't repeat</option>${freqOptions('')}</select></label>` : ''}
       <div id="futureHint" class="hint"></div>
       <div class="row"><button class="primary">Save</button>${!isNew ? '<button type="button" id="del" class="danger">Delete</button>' : ''}</div>
@@ -383,7 +394,7 @@ function editTxn(t, preset = {}) {
     </form>`);
   const f = body.querySelector('#f');
   let catTouched = !!t.categoryId;
-  let splits = (t.splits || []).map(x => ({ ...x })), items = null, splitOn = splits.length > 1;
+  let splits = (t.splits || []).map(x => ({ ...x })), items = null, itemTax = 0, splitOn = splits.length > 1;
   function applyType() {
     const ty = t.type;
     body.querySelectorAll('#ttype button').forEach(b => b.classList.toggle('on', b.dataset.type === ty));
@@ -418,7 +429,7 @@ function editTxn(t, preset = {}) {
     body.querySelector('#splitBtn').classList.toggle('hidden-f', splitOn);
     body.querySelectorAll('.f-cat').forEach(e => e.classList.toggle('hidden-f', t.type !== 'expense' || splitOn));
     body.querySelector('#splitRows').innerHTML = splits.map((x, i) => `<div style="display:grid;grid-template-columns:1fr 96px 34px;gap:6px;align-items:center" data-r="${i}">
-      <select data-k="cat">${categoryOptions('expense', x.categoryId)}</select><input data-k="amt" type="number" step="0.01" inputmode="decimal" value="${x.amount}" style="margin-top:4px">
+      <select data-k="cat">${categoryOptions('expense', x.categoryId)}</select><input data-k="amt" type="text" inputmode="decimal" data-money autocomplete="off" value="${x.amount}" style="margin-top:4px">
       <button type="button" class="secondary" data-k="x" style="padding:8px 0;margin-top:4px" aria-label="Remove line">✕</button></div>`).join('');
     const left = M.round2(amt() - splits.reduce((a, x) => a + (+x.amount || 0), 0));
     body.querySelector('#splitMsg').innerHTML = Math.abs(left) < 0.005 ? '✅ Adds up to the total' : `<span class="exp">${left > 0 ? fmt(left) + ' not assigned yet' : fmt(-left) + ' more than the total'}</span>`;
@@ -426,12 +437,18 @@ function editTxn(t, preset = {}) {
   function renderItems() {
     const el = body.querySelector('#items');
     if (!items?.length) return (el.innerHTML = '');
-    el.innerHTML = `<small>${items.length} items on the receipt — change any category and the split updates (and is remembered next time)</small>` +
-      items.map((it, i) => `<div style="display:grid;grid-template-columns:1fr 70px;gap:4px 8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)" data-it="${i}">
-        <span style="font-size:13px">${esc(it.desc)}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</span><span style="text-align:right;font-size:13px">${fmt(it.amount)}</span>
-        <select data-k="icat" style="grid-column:1/3;margin:0;padding:6px;font-size:13px">${categoryOptions('expense', it.categoryId)}</select></div>`).join('');
+    const sum = M.round2(items.reduce((a, x) => a + (+x.amount || 0), 0)), gap = M.round2(amt() - sum - itemTax);
+    el.innerHTML = `<small>${items.length} items on the receipt — fix any price or category and the split updates (categories are remembered next time)</small>` +
+      items.map((it, i) => `<div style="display:grid;grid-template-columns:1fr 84px 34px;gap:4px 6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)" data-it="${i}">
+        <span style="font-size:13px">${it.manual ? '<input data-k="idesc" placeholder="Item name" value="' + esc(it.desc) + '" style="margin:0;padding:6px;font-size:13px">' : esc(it.desc)}${it.discount ? ` <span class="pill">−${fmt(it.discount)} discount</span>` : ''}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</span>
+        <input data-k="iamt" type="text" inputmode="decimal" data-money autocomplete="off" value="${(+it.amount).toFixed(2)}" style="margin:0;padding:6px;font-size:13px;text-align:right">
+        <button type="button" class="secondary" data-k="ix" style="padding:6px 0;margin:0" aria-label="Remove item">✕</button>
+        <select data-k="icat" style="grid-column:1/4;margin:0;padding:6px;font-size:13px">${categoryOptions('expense', it.categoryId)}</select></div>`).join('') +
+      `<div class="hint" style="margin-top:6px">Items ${fmt(sum)}${itemTax ? ` + tax ${fmt(itemTax)}` : ''} = ${fmt(M.round2(sum + itemTax))} · receipt total ${fmt(amt())}
+        ${Math.abs(gap) < 0.02 ? ' ✅' : `<br><span class="exp">${gap > 0 ? fmt(gap) + ' not on any item — an item may have been missed' : fmt(-gap) + ' more than the total — check prices'}</span>`}</div>
+      <div class="row"><button type="button" class="secondary" data-k="iadd">+ Item${gap > 0.02 ? ' (' + fmt(gap) + ')' : ''}</button></div>`;
   }
-  const rebuildFromItems = () => { splits = R.buildSplits(items, amt()); renderSplit(); };
+  const rebuildFromItems = () => { splits = R.buildSplits(items, amt()); renderSplit(); renderItems(); };
   body.querySelector('#splitBtn').onclick = () => {
     splitOn = true;
     if (!splits.length) splits = [{ categoryId: f.categoryId.value || '', amount: amt() }, { categoryId: '', amount: 0 }];
@@ -449,13 +466,26 @@ function editTxn(t, preset = {}) {
   };
   box.addEventListener('change', e => {
     const r = e.target.closest('[data-r]'), it = e.target.closest('[data-it]');
-    if (it) { const x = items[+it.dataset.it]; x.categoryId = e.target.value; x.changed = true; return rebuildFromItems(); }
+    if (it) {
+      const x = items[+it.dataset.it], k = e.target.dataset.k;
+      if (k === 'icat') { x.categoryId = e.target.value; x.changed = true; x.how = 'picked'; }
+      if (k === 'iamt') { x.amount = M.round2(parseFloat(e.target.value) || 0); }
+      if (k === 'idesc') { x.desc = e.target.value; return; }
+      return rebuildFromItems();
+    }
     if (!r) return; const x = splits[+r.dataset.r];
     if (e.target.dataset.k === 'cat') x.categoryId = e.target.value;
     if (e.target.dataset.k === 'amt') x.amount = M.round2(+e.target.value || 0);
     renderSplit();
   });
-  box.addEventListener('click', e => { const b = e.target.closest('[data-k="x"]'); if (b) { splits.splice(+b.closest('[data-r]').dataset.r, 1); renderSplit(); } });
+  box.addEventListener('click', e => {
+    const b = e.target.closest('[data-k="x"]'); if (b) { splits.splice(+b.closest('[data-r]').dataset.r, 1); renderSplit(); }
+    const ix = e.target.closest('[data-k="ix"]'); if (ix) { items.splice(+ix.closest('[data-it]').dataset.it, 1); rebuildFromItems(); }
+    if (e.target.closest('[data-k="iadd"]')) {
+      const gap = M.round2(amt() - itemTax - items.reduce((a, x) => a + (+x.amount || 0), 0));
+      items.push({ desc: '', amount: Math.max(0, gap), categoryId: '', manual: true }); rebuildFromItems();
+    }
+  });
   f.amount.addEventListener('change', () => { if (!splitOn) return; if (items) rebuildFromItems(); else renderSplit(); });
   renderSplit();
 
@@ -477,10 +507,15 @@ function editTxn(t, preset = {}) {
       f.desc.value = text.split('\n').filter(Boolean).slice(0, 12).join('\n');
       futureHint();
       const pi = R.parseItems(text);
+      if (!r.total && pi.total) f.amount.value = pi.total.toFixed(2);
+      itemTax = pi.tax || 0;
       if (pi.items.length >= 2) {
         // Anything the app can't place gets the store's usual category, so you only fix the exceptions.
-        const storeCat = sg.categoryId || (catTouched && f.categoryId.value) || '';
-        items = pi.items.map(i => { const c = R.classifyItem(S, i.desc); return { ...i, ...c, ...(c.categoryId ? {} : storeCat ? { categoryId: storeCat, how: 'store' } : {}) }; });
+        const cls = pi.items.map(i => ({ ...i, ...R.classifyItem(S, i.desc) }));
+        const groc = cls.filter(c => c.group === 'groceries' && c.categoryId), mostlyGroc = groc.length * 2 >= cls.filter(c => c.categoryId).length && groc.length >= 2;
+        const grocTop = mostlyGroc && (() => { const c = M.get(S, 'categories', groc[0].categoryId); return c?.parentId || c?.id; })();
+        const storeCat = grocTop || sg.categoryId || (catTouched && f.categoryId.value) || '';
+        items = cls.map(c => (c.categoryId ? c : storeCat ? { ...c, categoryId: storeCat, how: 'store' } : c));
         const cats = new Set(items.map(i => i.categoryId || '?'));
         if (cats.size > 1 || cats.has('?')) { splitOn = true; renderItems(); rebuildFromItems(); }
         else { const only = [...cats][0]; f.categoryId.value = only; t.categoryId = only; catTouched = true; }
@@ -556,7 +591,7 @@ function editRecurring(r) {
     <div class="seg" id="ttype">${['expense', 'income', 'transfer', 'mortgage'].map(x => `<button type="button" data-type="${x}" class="${t.type === x ? 'on' : ''}">${cap(x)}</button>`).join('')}</div>
     <form id="f">
       <label>Name / note<input name="note" value="${esc(t.note)}" placeholder="e.g. Internet bill" required></label>
-      <div class="two"><label>Amount<input type="number" step="0.01" min="0" inputmode="decimal" name="amount" value="${t.amount}" required></label>
+      <div class="two"><label>Amount<input type="text" inputmode="decimal" data-money autocomplete="off" name="amount" value="${t.amount}" required></label>
       <label>Repeats<select name="freq">${freqOptions(r.freq)}</select></label></div>
       <div class="two"><label>First / next due date<input type="date" name="startDate" value="${r.startDate}" required></label>
       <label>End date (optional)<input type="date" name="endDate" value="${r.endDate || ''}"></label></div>
@@ -639,14 +674,14 @@ function editMortgage(m) {
   };
   const body = openSheet(isNew ? 'Add mortgage' : 'Edit mortgage', `<form id="f">
     <div class="two"><label>Name<input name="name" value="${esc(m.name)}" required></label><label>Lender<input name="lender" value="${esc(m.lender)}" placeholder="First National"></label></div>
-    <div class="two"><label>Balance owing<input type="number" step="0.01" name="principal" value="${m.principal}" required></label>
+    <div class="two"><label>Balance owing<input type="text" inputmode="decimal" data-money autocomplete="off" name="principal" value="${m.principal}" required></label>
     <label>…as of date<input type="date" name="startDate" value="${m.startDate}" required></label></div>
     <div class="hint">Use the balance from your latest mortgage statement. Payments after this date reduce it automatically.</div>
-    <div class="two"><label>Interest rate %<input type="number" step="0.001" name="rate" value="${m.rate}" required></label>
+    <div class="two"><label>Interest rate %<input type="text" inputmode="decimal" data-money="rate" autocomplete="off" name="rate" value="${m.rate}" required></label>
     <label>Rate type<select name="compounding"><option value="semiannual" ${m.compounding === 'semiannual' ? 'selected' : ''}>Fixed (semi-annual compounding)</option><option value="monthly" ${m.compounding === 'monthly' ? 'selected' : ''}>Variable (monthly compounding)</option></select></label></div>
     <div class="two"><label>Payment frequency<select name="frequency">${Object.entries(M.MORT_FREQ).map(([k, v]) => `<option value="${k}" ${k === m.frequency ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
     <label>Remaining amortization (yrs)<input type="number" step="0.5" name="amortYears" value="${m.amortYears || ''}"></label></div>
-    <div class="two"><label>Payment amount<input type="number" step="0.01" name="payment" value="${m.payment}" required></label>
+    <div class="two"><label>Payment amount<input type="text" inputmode="decimal" data-money autocomplete="off" name="payment" value="${m.payment}" required></label>
     <label>&nbsp;<button type="button" id="calc" class="secondary" style="width:100%;margin-top:4px">Calculate</button></label></div>
     <label>Term renewal date (optional)<input type="date" name="termEnd" value="${m.termEnd || ''}"></label>
     <label>Purpose of payments (for the rental report)<select name="tag"><option value="">Personal</option><option value="rental-shared" ${m.defaultTag === 'rental-shared' ? 'selected' : ''}>🏠 Shared home cost — interest counted at rental %</option><option value="rental" ${m.defaultTag === 'rental' ? 'selected' : ''}>🏘️ Rental property (100%)</option></select></label>
@@ -717,7 +752,7 @@ function mortgageDetail(m) {
     </div>
     ${!rec ? `<div class="banner">No repeat payment is set up for this mortgage yet${firstDate ? ` (next due ${firstDate})` : ''}. <button class="secondary" id="mkrec" style="padding:4px 10px">Create it</button></div>` : ''}
     <div class="section-title">What if I pay extra each payment?</div>
-    <div class="pad" style="padding-top:0"><div class="two"><input type="number" id="extra" step="10" placeholder="Extra $ per payment"><div id="whatif" class="hint" style="margin:10px 0 0"></div></div></div>
+    <div class="pad" style="padding-top:0"><div class="two"><input type="text" inputmode="decimal" data-money autocomplete="off" id="extra" placeholder="Extra $ per payment"><div id="whatif" class="hint" style="margin:10px 0 0"></div></div></div>
     ${m.annual && Object.keys(m.annual).length ? `<div class="section-title">From your lender's annual statements</div>
     <div class="tablewrap"><table><tr><th>Year</th><th>Paid</th><th>Interest</th><th>Principal</th><th>Year-end balance</th></tr>
       ${Object.entries(m.annual).sort().reverse().map(([y, a]) => `<tr><td>${y}</td><td>${fmt(a.paid)}</td><td>${fmt(a.interest)}</td><td>${fmt(a.principal)}</td><td>${fmt(a.closing)}</td></tr>`).join('')}</table></div>` : ''}
@@ -784,7 +819,7 @@ function editCategory(c, type) {
     <div class="two"><label>Emoji<input name="emoji" value="${esc(c.emoji)}" maxlength="4"></label><label>Name<input name="name" value="${esc(c.name)}" required></label></div>
     <label>Subcategory of<select name="parentId"><option value="">— Main category —</option>${parents.map(p => `<option value="${p.id}" ${p.id === c.parentId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label>
     <label>Default purpose<select name="tag"><option value="">Personal / none</option>${Object.entries(X.TAGS).filter(([k]) => k !== 'personal').map(([k, v]) => `<option value="${k}" ${c.defaultTag === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
-    ${c.type === 'expense' ? `<label>Monthly budget (main categories)<input name="budget" type="number" min="0" step="10" value="${c.budget || ''}" placeholder="none"></label>` : ''}
+    ${c.type === 'expense' ? `<label>Monthly budget (main categories)<input name="budget" type="text" inputmode="decimal" data-money autocomplete="off" value="${c.budget || ''}" placeholder="none"></label>` : ''}
     <div class="row"><button class="primary">Save</button>${!isNew ? '<button type="button" id="del" class="danger">Delete</button>' : ''}</div></form>`);
   const f = body.querySelector('#f');
   if (!isNew) body.querySelector('#del').onclick = () => {
@@ -813,7 +848,7 @@ function editAccount(a) {
   const body = openSheet(isNew ? 'Add account' : 'Edit account', `<form id="f">
     <label>Group<select name="groupId">${sortedGroups().map(g => `<option value="${g.id}" ${g.id === a.groupId ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></label>
     <label>Name<input name="name" value="${esc(a.name)}" required></label>
-    <label>Current balance (negative for money owed, e.g. card or loan)<input type="number" step="0.01" name="balance" value="${M.round2(cur)}"></label>
+    <label>Current balance (negative for money owed, e.g. card or loan)<input type="text" inputmode="decimal" data-money="signed" autocomplete="off" name="balance" value="${M.round2(cur)}"></label>
     <label>Card / account number endings<input name="numbers" inputmode="numeric" placeholder="e.g. 1234, 5678" value="${esc(I.accountEndings(a).join(', '))}"></label>
     <div class="hint" style="margin-top:-4px">Last 4 digits of every card/account number on this account — used to pick the right account for statements, CSVs, receipts and transfers.</div>
     <div class="two"><label>Statement day (cards)<input type="number" min="1" max="31" name="statementDay" value="${a.statementDay || ''}"></label>
@@ -1513,7 +1548,7 @@ function budgetsScreen() {
   const body = openSheet('Monthly budgets', `
     <div class="hint">Set a monthly limit for the categories you want to watch. Progress shows on the Stats tab, and “Needs attention” warns you at 90%. This month so far is shown for each.</div>
     <form id="f"><div class="list">${cats.map(c => `<div class="li"><div class="grow">${esc((c.emoji || '') + ' ' + c.name)}<small>${MONTHS[cursor.getMonth()]}: ${fmt(top[c.id] || 0)}${st[c.id] ? ` · ${Math.round(st[c.id].pct * 100)}%` : ''}</small></div>
-      <input name="b_${c.id}" type="number" min="0" step="10" inputmode="decimal" value="${c.budget || ''}" placeholder="—" style="width:110px;margin:0"></div>`).join('')}</div>
+      <input name="b_${c.id}" type="text" inputmode="decimal" data-money autocomplete="off" value="${c.budget || ''}" placeholder="—" style="width:110px;margin:0"></div>`).join('')}</div>
     <div class="sticky-bar"><button class="primary" style="width:100%">Save budgets</button></div></form>`);
   body.querySelector('#f').onsubmit = e => {
     e.preventDefault();
