@@ -311,7 +311,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.29-c';
+const APP_VERSION = '2026.10.29-d';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -904,7 +904,9 @@ function syncScreen() {
   body.querySelector('#impFile').onchange = async e => {
     const file = e.target.files[0]; if (!file) return;
     try {
-      let raw = JSON.parse(await file.text());
+      const txt = await file.text();
+      if (txt.startsWith('SQLite format')) return toast('That is a Money Manager database, not a MoneyBook backup. Pick a .json file (MoneyBook backup or setup file).');
+      let raw = JSON.parse(txt);
       if (Cx.isEncrypted(raw)) { const r = await askPassphrase(raw, 'This backup file is encrypted.'); if (!r) return; raw = r.data; }
       if (raw.type === 'moneybook-setup') return applySetup(raw);
       const data = M.migrate(raw);
