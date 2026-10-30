@@ -311,7 +311,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.29-d';
+const APP_VERSION = '2026.10.29-e';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1578,9 +1578,11 @@ function lockSettings() {
 function recoverHistory(data) {
   let n = 0;
   for (const c of ['accounts', 'mortgages']) for (const old of data[c] || []) {
-    const cur = M.get(S, c, old.id); if (!cur) continue;
+    // Same record id, or — if duplicate clean-up gave it a new id — the live record with the same name.
+    const nm = x => (x.name || '').trim().toLowerCase();
+    const cur = (M.get(S, c, old.id)?.deleted ? null : M.get(S, c, old.id)) || M.live(S, c).find(x => nm(x) && nm(x) === nm(old)); if (!cur) continue;
     const before = JSON.stringify(cur);
-    const merged = M.merge({ [c]: [cur] }, { [c]: [{ ...old, updatedAt: 0 }] })[c][0];
+    const merged = M.merge({ [c]: [cur] }, { [c]: [{ ...old, id: cur.id, groupId: cur.groupId, accountId: cur.accountId, updatedAt: 0 }] })[c][0];
     if (JSON.stringify(merged) !== before) { M.put(S, c, merged); n++; }
   }
   return n;
@@ -1608,7 +1610,7 @@ async function backupsScreen() {
           let raw = await Sync.downloadBackup(b.dataset.hist, L.clientId);
           if (Cx.isEncrypted(raw)) { if (vault && vault.salt === raw.salt) raw = await Cx.decryptJSON(raw, vault.key); else { const r = await askPassphrase(raw); if (!r) return; raw = r.data; } }
           const n = recoverHistory(M.migrate(raw)); commit();
-          toast(n ? `Recovered statement history for ${n} account${n === 1 ? '' : 's'}/mortgage — nothing else changed` : 'That backup has no extra history to add', 4500);
+          toast(n ? `Recovered statement history for ${n} account${n === 1 ? '' : 's'}/mortgage — nothing else changed` : `That backup has no extra history to add (it holds ${(raw.accounts || []).filter(a => !a.deleted).reduce((k, a) => k + (a.cycles?.length || 0), 0)} card statements)`, 6000);
         } catch (e) { toast(e.message, 4500); }
       }));
       body.querySelectorAll('[data-id]').forEach(b => (b.onclick = async () => {
