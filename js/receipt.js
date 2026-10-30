@@ -26,10 +26,10 @@ async function prep(file) {
 export async function ocr(file, onProgress = () => {}) {
   await loadTesseract();
   const canvas = await prep(file);
-  const { data } = await Tesseract.recognize(canvas, 'eng', {
-    logger: m => { if (m.status === 'recognizing text') onProgress(m.progress); }
-  });
-  return data.text;
+  // Read as one block of lines (page-segmentation mode 6) — keeps item names and prices on the same line.
+  const w = await Tesseract.createWorker('eng', 1, { logger: m => { if (m.status === 'recognizing text') onProgress(m.progress); } });
+  try { await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' }); const { data } = await w.recognize(canvas); return data.text; }
+  finally { w.terminate(); }
 }
 
 const AMT = /(\d{1,3}(?:[ ,]\d{3})*[.,]\d{2})(?!\d)/g;
@@ -114,7 +114,7 @@ export function learn(s, merchant, accountId, categoryId) {
 export const ITEM_HINTS = [
   ['clothing', /\b(shirt|tee|t-?shirt|jeans|pant|pants|short|shorts|sock|socks|dress|skirt|jacket|coat|hoodie|sweater|legging|bra|underwear|brief|boxer|pajama|pyjama|shoe|shoes|boot|boots|sandal|slipper|hat|cap|glove|mitt|scarf|apparel|girls|boys|mens|womens|ladies|kids? ?wear|george|athletic works|no boundaries)(?:e?s)?\b/i],
   ['school', /\b(notebook|note ?book|binder|pencil|pen|pens|crayon|marker|highlighter|eraser|glue|scissor|ruler|folder|paper pad|loose leaf|backpack|lunch ?box|stationery|sharpener|index card|sticky note|post-?it)(?:e?s)?\b/i],
-  ['household', /\b(detergent|bleach|cleaner|lysol|clorox|dish ?soap|dawn|sponge|paper towel|bounty|toilet paper|bathroom tissue|bath tissue|facial tissue|tissue|kleenex|royale|scotties|charmin|cottonelle|napkin|garbage bag|trash bag|hefty|glad|foil|plastic wrap|ziploc|storage bag|light ?bulb|battery|batteries|duracell|energizer|laundry|tide|gain|downy|fabric|swiffer|mop|broom|candle|air freshener|container|organizer|hanger|vacuum|filter|kitchen|utensil|mug|plate|bowl|cup|towel|sheet|pillow)(?:e?s)?\b/i],
+  ['household', /\b(detergent|bleach|cleaner|lysol|clorox|dish ?soap|dawn|sponge|paper towel|bounty|toilet paper|bathroom tissue|bath tissue|facial tissue|tissue|kleenex|royale|scotties|charmin|cottonelle|napkin|garbage bag|trash bag|hefty|glad|foil|plastic wrap|ziploc|storage bag|light ?bulb|battery|batteries|duracell|energizer|laundry|tide|gain|downy|fabric|swiffer|mop|broom|candle|air freshener|container|organizer|hanger|vacuum|filter|kitchen|utensil|mug|plate|bowl|cup|towel|sheet|pillow)(?:e?s)?\b|towel/i],
   ['personal', /\b(shampoo|conditioner|body ?wash|soap bar|toothpaste|toothbrush|floss|mouthwash|deodorant|razor|shave|lotion|sunscreen|cosmetic|makeup|lipstick|nail|hair|tampon|pad|diaper|wipes|cotton|q-?tip|colgate|crest|dove|gillette|nivea|vaseline)(?:e?s)?\b/i],
   ['health', /\b(vitamin|tylenol|advil|motrin|aspirin|allergy|reactine|claritin|cough|cold|medicine|pharmacy|rx|bandage|band-?aid|thermometer|supplement|probiotic|omega)(?:e?s)?\b/i],
   ['kids', /\b(toy|toys|lego|barbie|hot wheels|puzzle|game|doll|plush|crayola|play-?doh|nerf|stroller|baby|infant|toddler)(?:e?s)?\b/i],
@@ -133,38 +133,67 @@ export const HINT_CATEGORIES = {
   garden: ['garden', 'home'], gift: ['gifts', 'gift'],
 };
 const NOT_ITEM = /sub-?\s*total|\btotal\b|\btax\b|\bhst\b|\bgst\b|\bpst\b|\bqst\b|change|cash|visa|master|debit|credit|amex|tend|payment|balance|saving|you saved|discount|coupon|points|rewards|approved|auth|ref\b|tran|account|card ?#|items? sold|thank/i;
+// Receipt line → { desc, price, minus } — tolerant of OCR noise after the price ("7.09.", "4.00- H", "27.99 He",
+// "13.99 ..") and of misread decimal points ("6:00", "12 .99", "899" with the dot lost).
+function splitPrice(l) {
+  const m = l.match(/^(.*?)\s*(-?\$?)(\d{1,4})\s?[.,:;]\s?(\d{2})\s*(-?)\s*([^\d]{0,5})$/);
+  if (m && !/[A-Za-z]{3}/.test(m[6].replace(/^(he?|[a-z])\b/i, ''))) return { desc: m[1], price: +(m[3] + '.' + m[4]), minus: !!(m[5] || /-/.test(m[2])) };
+  const n = l.match(/^(.*[A-Za-z].*?)\s+(\d{3,4})\s*([^\w]{0,3}|[A-Z]{1,2})$/);    // dot lost: "CAESAR 899"
+  if (n && /\d{3,}\s+\S*[A-Za-z]/.test(n[1])) return { desc: n[1], price: +n[2] / 100, minus: false, guessed: true };
+  return null;
+}
+const round2 = v => Math.round(v * 100) / 100;
 export function parseItems(text) {
   const items = []; let tax = 0, subtotal = null, total = null, pending = null;
-  const PRICE = /(-?\$?\d{1,4}\.\d{2})\s*(-|[A-Z]{1,3})?$/;
   for (const raw of text.split(/\r?\n/)) {
-    // tidy OCR: "12 .99" / "12, 99" → "12.99"; "3.00 -" → "3.00-"
-    const l = raw.replace(/\s+/g, ' ').trim().replace(/(\d)\s?[.,]\s?(\d{2})(?=\s*(-|[A-Z]{1,3})?$)/, '$1.$2').replace(/(\d\.\d{2})\s+-$/, '$1-');
-    if (!l) continue;
-    let m = l.match(new RegExp('^(.*?[A-Za-z].*?)\\s+' + PRICE.source));
-    if (!m) {
-      const p = l.match(new RegExp('^' + PRICE.source));
-      if (p && pending) m = [l, pending, p[1], p[2]];          // name on one line, price on the next
-      else { pending = /[A-Za-z]{3}/.test(l) && !/\d+\.\d{2}/.test(l) && !NOT_ITEM.test(l) ? l : null; continue; }
+    const l = raw.replace(/\s+/g, ' ').trim(); if (!l) continue;
+    if (/^\W*\d+\s*@/.test(l)) continue;                                   // "3 @ 6.09" quantity line
+    let p = splitPrice(l);
+    const lastIt = items[items.length - 1];
+    if (p && !/[A-Za-z0-9]/.test(p.desc) && lastIt?.noPrice && !p.minus) { lastIt.amount = p.price; delete lastIt.noPrice; continue; }   // price on the next line
+    if (p && !/[A-Za-z0-9]/.test(p.desc) && pending) p.desc = pending;
+    if (!p) {
+      pending = /[A-Za-z]{3}/.test(l) && !NOT_ITEM.test(l) && !/\*{3}/.test(l) ? l : null;
+      // "88426 CUCUMBERS . Bag" — an item whose price couldn't be read: keep it with no price so you only type the price
+      const im = pending && l.match(/^\W{0,3}(\d{4,7})\s+(.*[A-Za-z]{3}.*)$/);
+      if (im) { items.push({ desc: im[2].replace(/[|]/g, '').replace(/[^A-Za-z0-9%)]+\S{0,4}$/, '').trim(), amount: 0, code: im[1], noPrice: true }); pending = null; }
+      continue;
     }
     pending = null;
-    const amt = parseFloat(m[2].replace(/[$\s]/g, '')) * (m[3] === '-' || /^-/.test(m[2]) ? -1 : 1);
-    const desc = m[1].replace(/^\d{6,}\s*/, '').replace(/\s\d{6,}\b/g, '').trim();
+    const amt = p.price * (p.minus ? -1 : 1), desc = p.desc.trim();
     const letters = desc.replace(/[^a-z]/gi, '');
     if (((/(h|g|p|q)st\b|\btax\b|\b(5|13|15|9\.975|14\.975)\s?%/i.test(desc)) || /^[t1il]?ax$/i.test(letters)) && !/before tax/i.test(desc)) { if (Math.abs(amt) < 1000) tax += amt; continue; }
     if (/\b(amount|amt|purchase|approved|change due)\b\s*:?/i.test(desc) && letters.length <= 12) { total = Math.max(total ?? 0, amt); continue; }
     if (/sub-?\s*total/i.test(desc)) { subtotal = amt; continue; }
     if (/\btotal\b/i.test(desc)) { total = Math.max(total ?? 0, amt); continue; }
-    // Discounts (Costco "TPD/1234567 3.00-", instant savings, coupons) come right after their item: take them off it.
-    const isDisc = amt < 0 || /\b(tpd|inst(ant)?\s*sav\w*|savings?|discount|disc|coupon|cpn|promo|rebate|mfr)\b/i.test(desc);
+    // Discounts come right after their item. Costco prints "0000394073 / 318527 4.00-" (coupon / item number);
+    // others say TPD, instant savings, coupon… Take them off the item they belong to.
+    const code = desc.match(/\/\s*[^\d]{0,3}(\d{4,7})/);
+    const isDisc = amt < 0 || /^\W*0{3,}\d*\s*\//.test(desc) || (/^\W*\d{6,}\s*\//.test(desc) && !/[A-Za-z]{3}/.test(desc)) ||
+      /\b(tpd|inst(ant)?\s*sav\w*|savings?|discount|disc|coupon|cpn|promo|rebate|mfr)\b/i.test(desc);
     if (isDisc) {
-      const prev = items[items.length - 1], off = Math.abs(amt);
-      if (prev && off < prev.amount) { prev.amount = Math.round((prev.amount - off) * 100) / 100; prev.discount = Math.round(((prev.discount || 0) + off) * 100) / 100; }
+      const off = Math.abs(amt);
+      const target = (code && items.find(i => i.code === code[1] && i.amount > off)) || [...items].reverse().find(i => i.amount > off);
+      if (target) { target.amount = round2(target.amount - off); target.discount = round2((target.discount || 0) + off); }
       continue;
     }
     if (NOT_ITEM.test(desc) || letters.length < 2) continue;
-    items.push({ desc: desc.replace(/^.{0,12}?\d{4,7}\s+(?=[A-Za-z])/, '').replace(/^[^A-Za-z0-9]+/, '').trim() || desc, amount: Math.round(amt * 100) / 100 });
+    const ic = desc.match(/(\d{3,7})\s+(?=\S*[A-Za-z])/);
+    const name = desc.replace(/[|]/g, ' ').replace(/\s+/g, ' ').replace(/^.{0,12}?\d{3,7}\s+(?=\S*[A-Za-z])/, '').replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9%)]+$/, '').trim() || desc;
+    items.push({ desc: name, amount: round2(amt), ...(ic ? { code: ic[1] } : {}), ...(p.guessed ? { guessed: true } : {}) });
   }
-  return { items, tax: Math.round(tax * 100) / 100, subtotal, total };
+  // A misread SUBTOTAL line looks like one big item at the end: drop it.
+  const last = items[items.length - 1];
+  if (last && items.length > 3) {
+    const rest = round2(items.slice(0, -1).reduce((a, i) => a + i.amount, 0));
+    if ((subtotal != null && Math.abs(last.amount - subtotal) < 0.01) || Math.abs(last.amount - rest) <= Math.max(0.05, rest * 0.25) && last.amount > 40 && !last.code) { items.pop(); subtotal = subtotal ?? last.amount; }
+  }
+  tax = round2(tax);
+  const np = items.filter(i => i.noPrice);
+  if (np.length === 1 && subtotal != null) { const gap = round2(subtotal - items.reduce((a, i) => a + i.amount, 0)); if (gap > 0) np[0].amount = gap; }
+  // The TOTAL is often printed white-on-black and unreadable: use subtotal + tax.
+  if (subtotal != null && (total == null || total < subtotal - 0.005 || (tax && Math.abs(total - subtotal) < 0.005))) total = round2(subtotal + tax);
+  return { items, tax, subtotal, total };
 }
 const words = d => (d || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/).filter(w => w.length > 2);
 export function classifyItem(s, desc) {

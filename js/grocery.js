@@ -1,17 +1,17 @@
 // Built-in grocery vocabulary for reading receipt lines, grouped by store section.
 // Matching tolerates receipt abbreviations and camera misreads (e.g. "POJATPES" → potatoes, "MLJK" → milk).
 const SECTIONS = {
-  produce: `apple apples ambrosia gala fuji honeycrisp mcintosh granny banana bananas plantain pear pears bosc anjou bartlett orange oranges navel
+  fruit: `apple apples ambrosia gala fuji honeycrisp mcintosh granny banana bananas plantain pear pears bosc anjou bartlett orange oranges navel
     mandarin mandarins clementine clementines tangerine grapefruit lemon lemons lime limes grape grapes berry berries strawberry strawberries
-    blueberry blueberries raspberry raspberries blackberry blackberries cranberry cherry cherries peach peaches nectarine plum plums apricot kiwi
-    mango mangoes papaya pineapple melon watermelon cantaloupe honeydew pomegranate guava lychee fig dates coconut avocado avocados tomato tomatoes
-    potato potatoes yam yams sweet onion onions shallot garlic ginger carrot carrots celery cucumber cucumbers zucchini squash pumpkin eggplant
+    blueberry blueberries raspberry raspberries blackberry blackberries cranberry cherry cherries peach peaches nectarine plum plums apricot kiwi kiwis
+    mango mangoes papaya pineapple melon watermelon cantaloupe honeydew pomegranate guava lychee fig dates coconut avocado avocados fruit fruits app`,
+  produce: `tomato tomatoes potato potatoes yam yams onion onions shallot garlic ginger carrot carrots celery cucumber cucumbers zucchini squash pumpkin eggplant
     pepper peppers capsicum jalapeno chili chilli lettuce romaine iceberg spinach kale arugula cabbage broccoli cauliflower brussels sprout sprouts
     asparagus bean beans okra peas corn mushroom mushrooms radish beet beets turnip parsnip leek cilantro coriander parsley mint basil dill
-    thyme rosemary methi fenugreek curry produce salad greens mesclun herbs microgreens organic`,
+    thyme rosemary methi fenugreek curry produce salad greens mesclun herbs microgreens organic vegetable vegetables veggies`,
   dairy: `milk milks cream creamer half butter margarine ghee cheese cheddar mozzarella mozz parmesan parm feta brie gouda swiss havarti provolone
     ricotta cottage paneer yogurt yoghurt yogourt kefir eggs egg dairy lactose oatmilk almondmilk soymilk natrel lactantia beatrice dairyland
-    neilson sealtest oikos activia danone liberte astro skyr`,
+    neilson sealtest oikos activia danone liberte astro skyr homo lact mozzarella`,
   meat: `chicken breast thigh thighs drumstick drumsticks wings wing beef steak ground mince pork chop chops bacon ham sausage sausages turkey lamb goat mutton
     veal ribs roast brisket salami pepperoni prosciutto deli meat meats fish salmon tilapia cod haddock tuna trout basa shrimp prawn prawns scallop
     crab lobster seafood hotdog hotdogs wieners burger burgers patties rotisserie`,
@@ -22,7 +22,7 @@ const SECTIONS = {
     cereal oats oatmeal granola cornflakes cheerios flakes lentil lentils dal daal chana chickpea chickpeas rajma kidney moong urad toor masoor
     beans canned soup broth stock tomato paste puree spice spices masala turmeric haldi cumin jeera coriander garam chilli paprika cinnamon
     pepper oregano baking soda powder yeast vanilla cocoa coconut tahini hummus pickle pickles achaar olives nuts almond almonds cashew cashews
-    walnut walnuts pistachio pistachios raisin raisins dried seeds quinoa couscous breadcrumbs stuffing gravy condiment dressing`,
+    walnut walnuts pistachio pistachios raisin raisins dried seeds quinoa couscous breadcrumbs stuffing gravy condiment dressing caesar ranch vinaigrette`,
   snacks: `chips crisps doritos lays ruffles pringles cheetos tostitos popcorn pretzel pretzels crackers cracker triscuit ritz goldfish cookie cookies
     biscuit biscuits shortbread kelsen oreo chocolate choco chocolates merci lindt ferrero toblerone kitkat snickers candy candies gummy gummies
     licorice mints gum granola bar bars snack snacks trail mix namkeen bhujia sev mixture rusk wafer wafers brownie brownies tin`,
@@ -36,7 +36,7 @@ const SECTIONS = {
 const FOOD_PREFIXES = /\b(ks|kirkland|gv|great value|pc|president'?s choice|no name|compliments|selection|irresistibles|our finest|sunrype)\b/i;
 
 const SECTION_NAMES = {
-  produce: ['produce', 'fruits & vegetables', 'fruit', 'vegetables'], dairy: ['dairy & eggs', 'dairy'], meat: ['meat & fish', 'meat', 'seafood'],
+  fruit: ['fruits', 'fruit', 'produce', 'fruits & vegetables'], produce: ['vegetables', 'veggies', 'vegetable', 'produce', 'fruits & vegetables'], dairy: ['dairy & eggs', 'dairy'], meat: ['meat & fish', 'meat', 'seafood'],
   bakery: ['bakery', 'bread'], pantry: ['pantry', 'staples'], snacks: ['snacks & drinks', 'snacks'], drinks: ['snacks & drinks', 'drinks', 'beverages'],
   frozen: ['frozen'], indian: ['indian groceries', 'indian'],
 };

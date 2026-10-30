@@ -322,7 +322,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.29-g';
+const APP_VERSION = '2026.10.29-h';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -440,7 +440,7 @@ function editTxn(t, preset = {}) {
     const sum = M.round2(items.reduce((a, x) => a + (+x.amount || 0), 0)), gap = M.round2(amt() - sum - itemTax);
     el.innerHTML = `<small>${items.length} items on the receipt — fix any price or category and the split updates (categories are remembered next time)</small>` +
       items.map((it, i) => `<div style="display:grid;grid-template-columns:1fr 84px 34px;gap:4px 6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)" data-it="${i}">
-        <span style="font-size:13px">${it.manual ? '<input data-k="idesc" placeholder="Item name" value="' + esc(it.desc) + '" style="margin:0;padding:6px;font-size:13px">' : esc(it.desc)}${it.discount ? ` <span class="pill">−${fmt(it.discount)} discount</span>` : ''}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</span>
+        <span style="font-size:13px">${it.manual ? '<input data-k="idesc" placeholder="Item name" value="' + esc(it.desc) + '" style="margin:0;padding:6px;font-size:13px">' : esc(it.desc)}${it.discount ? ` <span class="pill">−${fmt(it.discount)} discount</span>` : ''}${it.guessed || it.noPrice ? ' <span class="pill" style="background:var(--sched);color:#fff">check price</span>' : ''}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</span>
         <input data-k="iamt" type="text" inputmode="decimal" data-money autocomplete="off" value="${(+it.amount).toFixed(2)}" style="margin:0;padding:6px;font-size:13px;text-align:right">
         <button type="button" class="secondary" data-k="ix" style="padding:6px 0;margin:0" aria-label="Remove item">✕</button>
         <select data-k="icat" style="grid-column:1/4;margin:0;padding:6px;font-size:13px">${categoryOptions('expense', it.categoryId)}</select></div>`).join('') +
@@ -469,7 +469,7 @@ function editTxn(t, preset = {}) {
     if (it) {
       const x = items[+it.dataset.it], k = e.target.dataset.k;
       if (k === 'icat') { x.categoryId = e.target.value; x.changed = true; x.how = 'picked'; }
-      if (k === 'iamt') { x.amount = M.round2(parseFloat(e.target.value) || 0); }
+      if (k === 'iamt') { x.amount = M.round2(parseFloat(e.target.value) || 0); delete x.guessed; delete x.noPrice; }
       if (k === 'idesc') { x.desc = e.target.value; return; }
       return rebuildFromItems();
     }
@@ -507,7 +507,8 @@ function editTxn(t, preset = {}) {
       f.desc.value = text.split('\n').filter(Boolean).slice(0, 12).join('\n');
       futureHint();
       const pi = R.parseItems(text);
-      if (!r.total && pi.total) f.amount.value = pi.total.toFixed(2);
+      // Subtotal + tax from the item lines beats a guessed total (Costco prints TOTAL white-on-black).
+      if (pi.total && (!r.total || pi.subtotal != null)) f.amount.value = pi.total.toFixed(2);
       itemTax = pi.tax || 0;
       if (pi.items.length >= 2) {
         // Anything the app can't place gets the store's usual category, so you only fix the exceptions.
