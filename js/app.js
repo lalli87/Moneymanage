@@ -56,7 +56,7 @@ async function init() {
   // With sync on, clean up duplicates only after merging the latest from Drive (doSync), never on stale data.
   if (!L.clientId) { const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await DB.save(S); setTimeout(() => toast(`Merged ${dd.categories + dd.groups + dd.accounts} duplicate categories/accounts`), 800); } }
   render();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
   if (L.clientId) Sync.loadGis().catch(() => {});
   notifyUpcoming();
   // New day while app stays open → post due items.
@@ -311,7 +311,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.29-b';
+const APP_VERSION = '2026.10.29-c';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -333,7 +333,7 @@ function viewMore() {
     ${item('settings', '⚙️', 'Settings & reminders')}
     ${item('lockSettings', '🔒', 'App lock', L.lock?.pinHash ? (L.lock.credId ? 'PIN + fingerprint' : 'PIN') : 'Off')}
     ${item('backupsScreen', '🗂️', 'Drive backups', 'Weekly copies, restore')}
-  </div><div class="pad hint" style="text-align:center">MoneyBook version <b>${APP_VERSION}</b></div><div class="pad hint">MoneyBook keeps your data on this device and in a private app folder in your own Google Drive. Nothing is sent anywhere else.</div>`;
+  </div><div class="pad hint" style="text-align:center">MoneyBook version <b>${APP_VERSION}</b><br><button class="secondary" data-act="forceUpdate" style="margin-top:8px;padding:8px 14px">🔄 Check for updates</button></div><div class="pad hint">MoneyBook keeps your data on this device and in a private app folder in your own Google Drive. Nothing is sent anywhere else.</div>`;
 }
 
 // ---------- sheet ----------
@@ -1841,6 +1841,14 @@ new MutationObserver(muts => {
   }
 }).observe(document.body, { childList: true, subtree: true });
 
+// Fetch the newest app files now: drop the offline copy and the old service worker, then reload.
+// Your data is in IndexedDB and is not touched.
+async function forceUpdate() {
+  toast('Updating…');
+  try { const regs = await navigator.serviceWorker?.getRegistrations() || []; await Promise.all(regs.map(r => r.unregister())); } catch {}
+  try { const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); } catch {}
+  location.replace(location.pathname + '?u=' + Date.now());
+}
 const actions = {
   tab: el => { tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   prevMonth: () => { cursor.setMonth(cursor.getMonth() - 1); render(); },
@@ -1856,7 +1864,7 @@ const actions = {
   editGroup: () => editGroup(),
   openMortgage: el => mortgageDetail(M.get(S, 'mortgages', el.dataset.id)),
   mortgages: listMortgages, recurring: listRecurring, categories: () => listCategories(), manageAccounts,
-  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forecast: forecastScreen, budgets: budgetsScreen, taxReports: () => taxReports(), lockSettings, backupsScreen,
+  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forceUpdate, forecast: forecastScreen, budgets: budgetsScreen, taxReports: () => taxReports(), lockSettings, backupsScreen,
   payCard: el => { const id = el.dataset.id; editTxn(null, { type: 'transfer', amount: +el.dataset.amt || '', accountId: I.usualPayer(S, id) || defaultAccount(), toAccountId: id, note: 'Card payment' }); },
   addBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) editTxn(null, { ...r.template, date: el.dataset.date <= today() ? el.dataset.date : today() }); },
   skipBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) { r.dismissed = [...(r.dismissed || []), el.dataset.date].slice(-12); M.put(S, 'recurring', r); commit(); toast('Skipped this time'); } },
