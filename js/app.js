@@ -326,7 +326,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.31-a';
+const APP_VERSION = '2026.10.31-b';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -381,7 +381,7 @@ function editTxn(t, preset = {}) {
           <div id="items"></div>
           <small>Category lines — they must add up to the amount</small>
           <div id="splitRows"></div>
-          <div class="btnrow" style="padding:6px 0 0"><button type="button" class="secondary" id="addLine">+ Line</button><button type="button" class="secondary" id="usual">Usual split here</button><button type="button" class="secondary" id="noSplit">No split</button></div>
+          <div class="btnrow" style="padding:6px 0 0"><button type="button" class="secondary" id="itemize">🧾 Item list</button><button type="button" class="secondary" id="addLine">+ Line</button><button type="button" class="secondary" id="usual">Usual split here</button><button type="button" class="secondary" id="noSplit">No split</button></div>
           <div id="splitMsg" class="hint" style="margin-bottom:0"></div>
         </div>
       </div>
@@ -398,7 +398,7 @@ function editTxn(t, preset = {}) {
     </form>`);
   const f = body.querySelector('#f');
   let catTouched = !!t.categoryId;
-  let splits = (t.splits || []).map(x => ({ ...x })), items = null, itemTax = 0, splitOn = splits.length > 1;
+  let splits = (t.splits || []).map(x => ({ ...x })), items = t.items ? t.items.map(x => ({ ...x })) : null, itemTax = +t.itemTax || 0, splitOn = splits.length > 1 || !!t.items?.length;
   function applyType() {
     const ty = t.type;
     body.querySelectorAll('#ttype button').forEach(b => b.classList.toggle('on', b.dataset.type === ty));
@@ -440,23 +440,31 @@ function editTxn(t, preset = {}) {
   }
   function renderItems() {
     const el = body.querySelector('#items');
-    if (!items?.length) return (el.innerHTML = '');
+    body.querySelector('#itemize').classList.toggle('hidden-f', !!items);
+    if (!items) return (el.innerHTML = '');
     const sum = M.round2(items.reduce((a, x) => a + (+x.amount || 0), 0)), gap = M.round2(amt() - sum - itemTax);
-    el.innerHTML = `<small>${items.length} items on the receipt — fix any price or category and the split updates (categories are remembered next time)</small>` +
+    el.innerHTML = `<small>${items.length} item${items.length === 1 ? '' : 's'} — edit any name, price or category; the split follows (categories are remembered next time)</small>` +
       items.map((it, i) => `<div style="display:grid;grid-template-columns:1fr 84px 34px;gap:4px 6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)" data-it="${i}">
-        <span style="font-size:13px">${it.manual ? '<input data-k="idesc" placeholder="Item name" value="' + esc(it.desc) + '" style="margin:0;padding:6px;font-size:13px">' : esc(it.desc)}${it.discount ? ` <span class="pill">−${fmt(it.discount)} discount</span>` : ''}${it.guessed || it.noPrice ? ' <span class="pill" style="background:var(--sched);color:#fff">check price</span>' : ''}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</span>
+        <div><input data-k="idesc" placeholder="Item name" value="${esc(it.desc || '')}" style="margin:0;padding:6px;font-size:13px">${it.discount ? ` <span class="pill">−${fmt(it.discount)} discount</span>` : ''}${it.guessed || it.noPrice ? ' <span class="pill" style="background:var(--sched);color:#fff">check price</span>' : ''}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</div>
         <input data-k="iamt" type="text" inputmode="decimal" data-money autocomplete="off" value="${(+it.amount).toFixed(2)}" style="margin:0;padding:6px;font-size:13px;text-align:right">
         <button type="button" class="secondary" data-k="ix" style="padding:6px 0;margin:0" aria-label="Remove item">✕</button>
         <select data-k="icat" style="grid-column:1/4;margin:0;padding:6px;font-size:13px">${categoryOptions('expense', it.categoryId)}</select></div>`).join('') +
-      `<div class="hint" style="margin-top:6px">Items ${fmt(sum)}${itemTax ? ` + tax ${fmt(itemTax)}` : ''} = ${fmt(M.round2(sum + itemTax))} · receipt total ${fmt(amt())}
-        ${Math.abs(gap) < 0.02 ? ' ✅' : `<br><span class="exp">${gap > 0 ? fmt(gap) + ' not on any item — an item may have been missed' : fmt(-gap) + ' more than the total — check prices'}</span>`}</div>
-      <div class="row"><button type="button" class="secondary" data-k="iadd">+ Item${gap > 0.02 ? ' (' + fmt(gap) + ')' : ''}</button></div>`;
+      `<div style="display:grid;grid-template-columns:1fr 84px 34px;gap:6px;align-items:center;padding:6px 0"><span style="font-size:13px">Tax (HST/GST on the receipt)</span>
+        <input data-k="itax" type="text" inputmode="decimal" data-money autocomplete="off" value="${(+itemTax).toFixed(2)}" style="margin:0;padding:6px;font-size:13px;text-align:right"><span></span></div>
+      <div class="hint" style="margin-top:2px">Items ${fmt(sum)} + tax ${fmt(itemTax)} = <b>${fmt(M.round2(sum + itemTax))}</b> · amount ${fmt(amt())}
+        ${Math.abs(gap) < 0.02 ? ' ✅' : `<br><span class="exp">${gap > 0 ? fmt(gap) + ' not on any item — an item may have been missed' : fmt(-gap) + ' more than the amount — check prices and tax'}</span>`}</div>
+      <div class="btnrow" style="padding:4px 0 8px"><button type="button" class="secondary" data-k="iadd">+ Item${gap > 0.02 ? ' (' + fmt(gap) + ')' : ''}</button>${Math.abs(gap) >= 0.02 && sum > 0 ? `<button type="button" class="secondary" data-k="iamtset">Amount = ${fmt(M.round2(sum + itemTax))}</button>` : ''}<button type="button" class="secondary" data-k="iclear">Remove item list</button></div>`;
   }
   const rebuildFromItems = () => { splits = R.buildSplits(items, amt()); renderSplit(); renderItems(); };
   body.querySelector('#splitBtn').onclick = () => {
     splitOn = true;
     if (!splits.length) splits = [{ categoryId: f.categoryId.value || '', amount: amt() }, { categoryId: '', amount: 0 }];
     renderSplit();
+  };
+  body.querySelector('#itemize').onclick = () => {
+    items = splits.filter(x => x.categoryId && +x.amount).map(x => ({ desc: '', amount: +x.amount, categoryId: x.categoryId, manual: true }));
+    if (!items.length) items = [{ desc: '', amount: amt(), categoryId: f.categoryId.value || '', manual: true }];
+    itemTax = 0; rebuildFromItems();
   };
   body.querySelector('#addLine').onclick = () => { const left = M.round2(amt() - splits.reduce((a, x) => a + (+x.amount || 0), 0)); splits.push({ categoryId: '', amount: Math.max(0, left) }); renderSplit(); };
   body.querySelector('#noSplit').onclick = () => { splitOn = false; if (splits[0]?.categoryId) { f.categoryId.value = splits[0].categoryId; t.categoryId = splits[0].categoryId; } splits = []; items = null; renderItems(); renderSplit(); };
@@ -479,9 +487,10 @@ function editTxn(t, preset = {}) {
         const np = items.filter(i => i.noPrice);
         if (np.length === 1) { const gap = M.round2(amt() - itemTax - items.reduce((a, i) => a + (+i.amount || 0), 0)); if (gap > 0) { np[0].amount = gap; np[0].guessed = true; delete np[0].noPrice; } }
       }
-      if (k === 'idesc') { x.desc = e.target.value; return; }
+      if (k === 'idesc') { x.desc = e.target.value; if (x.categoryId) x.changed = true; return; }
       return rebuildFromItems();
     }
+    if (e.target.dataset.k === 'itax') { itemTax = M.round2(parseFloat(e.target.value) || 0); return rebuildFromItems(); }
     if (!r) return; const x = splits[+r.dataset.r];
     if (e.target.dataset.k === 'cat') x.categoryId = e.target.value;
     if (e.target.dataset.k === 'amt') x.amount = M.round2(+e.target.value || 0);
@@ -490,13 +499,15 @@ function editTxn(t, preset = {}) {
   box.addEventListener('click', e => {
     const b = e.target.closest('[data-k="x"]'); if (b) { splits.splice(+b.closest('[data-r]').dataset.r, 1); renderSplit(); }
     const ix = e.target.closest('[data-k="ix"]'); if (ix) { items.splice(+ix.closest('[data-it]').dataset.it, 1); rebuildFromItems(); }
+    if (e.target.closest('[data-k="iamtset"]')) { f.amount.value = M.round2(items.reduce((a, x) => a + (+x.amount || 0), 0) + itemTax).toFixed(2); return rebuildFromItems(); }
+    if (e.target.closest('[data-k="iclear"]')) { if (confirm('Remove the item list? The category lines stay.')) { items = null; itemTax = 0; renderItems(); } return; }
     if (e.target.closest('[data-k="iadd"]')) {
       const gap = M.round2(amt() - itemTax - items.reduce((a, x) => a + (+x.amount || 0), 0));
       items.push({ desc: '', amount: Math.max(0, gap), categoryId: '', manual: true }); rebuildFromItems();
     }
   });
   f.amount.addEventListener('change', () => { if (!splitOn) return; if (items) rebuildFromItems(); else renderSplit(); });
-  renderSplit();
+  renderSplit(); renderItems();
 
   // receipt scanning
   const msg = s => (body.querySelector('#scanMsg').textContent = s);
@@ -556,7 +567,7 @@ function editTxn(t, preset = {}) {
     };
     rec.toAccountId = t.type === 'transfer' ? f.toAccountId.value : undefined;
     rec.categoryId = t.type === 'expense' || t.type === 'income' ? f.categoryId.value : undefined;
-    rec.splits = undefined;
+    rec.splits = undefined; rec.items = undefined; rec.itemTax = undefined;
     if (t.type === 'expense' && splitOn) {
       const lines = splits.filter(x => x.categoryId && +x.amount);
       const left = M.round2(M.round2(amount) - lines.reduce((a, x) => a + +x.amount, 0));
@@ -564,7 +575,8 @@ function editTxn(t, preset = {}) {
       if (Math.abs(left) >= 0.01) return toast(`Split lines must add up to the amount (${left > 0 ? fmt(left) + ' left' : fmt(-left) + ' over'})`, 4000);
       if (lines.length > 1) { rec.splits = lines.map(x => ({ categoryId: x.categoryId, amount: M.round2(+x.amount) })).sort((a, b) => b.amount - a.amount); rec.categoryId = rec.splits[0].categoryId; }
       else if (lines.length === 1) rec.categoryId = lines[0].categoryId;
-      (items || []).filter(i => i.changed && i.categoryId).forEach(i => R.learnItem(S, i.desc, i.categoryId));
+      (items || []).filter(i => i.changed && i.categoryId && i.desc).forEach(i => R.learnItem(S, i.desc, i.categoryId));
+      if (items?.length) { rec.items = items.map(i => ({ desc: i.desc || '', amount: M.round2(+i.amount || 0), categoryId: i.categoryId || '', ...(i.discount ? { discount: i.discount } : {}) })); rec.itemTax = itemTax || undefined; }
     }
     rec.mortgageId = t.type === 'mortgage' ? f.mortgageId.value : undefined;
     rec.prepayment = t.type === 'mortgage' ? f.prepayment.checked : undefined;

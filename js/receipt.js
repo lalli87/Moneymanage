@@ -24,12 +24,29 @@ async function prep(file, hi = false) {
   g.drawImage(img, 0, 0, c.width, c.height);
   return c;
 }
+// Words → text lines, dropping the specks the camera reads from the table or the paper's edge left of the
+// receipt (low confidence, or sitting left of where the item names start).
+export function cleanLines(lines) {
+  const priced = lines.filter(ws => ws.some(w => /\d[.,]\d{2}/.test(w.text)));
+  const starts = priced.map(ws => ws.find(w => w.conf >= 85 && /[A-Za-z0-9]{2}/.test(w.text))?.x0).filter(v => v != null).sort((a, b) => a - b);
+  const col = starts.length >= 3 ? starts[Math.floor(starts.length / 2)] : null;
+  return lines.map(ws => {
+    let i = 0;
+    while (i < ws.length - 1 && !/\d[.,]\d{2}|\d{4,}/.test(ws[i].text) && (ws[i].conf < 60 || (col != null && ws[i].x1 < col - 8 && ws[i].conf < 92))) i++;
+    return ws.slice(i).map(w => w.text).join(' ');
+  }).join('\n');
+}
 export async function ocr(file, onProgress = () => {}, hi = false) {
   await loadTesseract();
   const canvas = await prep(file, hi);
   // Read as one block of lines (page-segmentation mode 6) — keeps item names and prices on the same line.
   const w = await Tesseract.createWorker('eng', 1, { logger: m => { if (m.status === 'recognizing text') onProgress(m.progress); } });
-  try { await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' }); const { data } = await w.recognize(canvas); return data.text; }
+  try {
+    await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+    const { data } = await w.recognize(canvas);
+    const lines = (data.lines || []).map(l => (l.words || []).map(x => ({ text: x.text, conf: x.confidence, x0: x.bbox.x0, x1: x.bbox.x1 })));
+    return lines.length ? cleanLines(lines) : data.text;
+  }
   finally { w.terminate(); }
 }
 
