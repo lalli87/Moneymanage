@@ -326,7 +326,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.29-i';
+const APP_VERSION = '2026.10.31-a';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -473,7 +473,12 @@ function editTxn(t, preset = {}) {
     if (it) {
       const x = items[+it.dataset.it], k = e.target.dataset.k;
       if (k === 'icat') { x.categoryId = e.target.value; x.changed = true; x.how = 'picked'; }
-      if (k === 'iamt') { x.amount = M.round2(parseFloat(e.target.value) || 0); delete x.guessed; delete x.noPrice; }
+      if (k === 'iamt') {
+        x.amount = M.round2(parseFloat(e.target.value) || 0); delete x.guessed; delete x.noPrice;
+        // One price still unknown? It must be whatever is left of the total.
+        const np = items.filter(i => i.noPrice);
+        if (np.length === 1) { const gap = M.round2(amt() - itemTax - items.reduce((a, i) => a + (+i.amount || 0), 0)); if (gap > 0) { np[0].amount = gap; np[0].guessed = true; delete np[0].noPrice; } }
+      }
       if (k === 'idesc') { x.desc = e.target.value; return; }
       return rebuildFromItems();
     }
@@ -511,6 +516,13 @@ function editTxn(t, preset = {}) {
       f.desc.value = text.split('\n').filter(Boolean).slice(0, 12).join('\n');
       futureHint();
       const pi = R.parseItems(text);
+      // Some prices unreadable? Read the photo once more at higher resolution and take the prices it finds.
+      if (pi.items.some(i => i.noPrice || i.guessed)) {
+        msg('Some prices were hard to read — taking a closer look…');
+        try { R.fillMissing(pi, R.parseItems(await R.ocr(file, p => msg(`Taking a closer look… ${Math.round(p * 100)}%`), true))); } catch {}
+        const np = pi.items.filter(i => i.noPrice);
+        if (np.length === 1 && pi.subtotal != null) { const gap = M.round2(pi.subtotal - pi.items.reduce((a, i) => a + i.amount, 0)); if (gap > 0) np[0].amount = gap; }
+      }
       // Subtotal + tax from the item lines beats a guessed total (Costco prints TOTAL white-on-black).
       if (pi.total && (!r.total || pi.subtotal != null)) f.amount.value = pi.total.toFixed(2);
       itemTax = pi.tax || 0;

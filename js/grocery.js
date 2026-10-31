@@ -11,7 +11,7 @@ const SECTIONS = {
     thyme rosemary methi fenugreek curry produce salad greens mesclun herbs microgreens organic vegetable vegetables veggies`,
   dairy: `milk milks cream creamer half butter margarine ghee cheese cheddar mozzarella mozz parmesan parm feta brie gouda swiss havarti provolone
     ricotta cottage paneer yogurt yoghurt yogourt kefir eggs egg dairy lactose oatmilk almondmilk soymilk natrel lactantia beatrice dairyland
-    neilson sealtest oikos activia danone liberte astro skyr homo lact mozzarella`,
+    neilson sealtest oikos activia danone liberte astro skyr homo lact mozzarella chse chs`,
   meat: `chicken breast thigh thighs drumstick drumsticks wings wing beef steak ground mince pork chop chops bacon ham sausage sausages turkey lamb goat mutton
     veal ribs roast brisket salami pepperoni prosciutto deli meat meats fish salmon tilapia cod haddock tuna trout basa shrimp prawn prawns scallop
     crab lobster seafood hotdog hotdogs wieners burger burgers patties rotisserie`,
@@ -22,15 +22,15 @@ const SECTIONS = {
     cereal oats oatmeal granola cornflakes cheerios flakes lentil lentils dal daal chana chickpea chickpeas rajma kidney moong urad toor masoor
     beans canned soup broth stock tomato paste puree spice spices masala turmeric haldi cumin jeera coriander garam chilli paprika cinnamon
     pepper oregano baking soda powder yeast vanilla cocoa coconut tahini hummus pickle pickles achaar olives nuts almond almonds cashew cashews
-    walnut walnuts pistachio pistachios raisin raisins dried seeds quinoa couscous breadcrumbs stuffing gravy condiment dressing caesar ranch vinaigrette`,
+    walnut walnuts pistachio pistachios raisin raisins dried seeds quinoa couscous breadcrumbs stuffing gravy condiment dressing caesar ranch vinaigrette rigati pennoni rigatoni fusilli`,
   snacks: `chips crisps doritos lays ruffles pringles cheetos tostitos popcorn pretzel pretzels crackers cracker triscuit ritz goldfish cookie cookies
     biscuit biscuits shortbread kelsen oreo chocolate choco chocolates merci lindt ferrero toblerone kitkat snickers candy candies gummy gummies
-    licorice mints gum granola bar bars snack snacks trail mix namkeen bhujia sev mixture rusk wafer wafers brownie brownies tin`,
+    licorice mints gum granola bar bars snack snacks trail mix namkeen bhujia sev mixture rusk wafer wafers brownie brownies tin goldfish hald`,
   drinks: `water sparkling perrier juice juices orange apple lemonade pop soda cola coke pepsi sprite ginger ale gatorade powerade energy redbull
-    coffee espresso tea chai green kombucha drink drinks beverage beverages tropicana minute maid oasis`,
+    coffee espresso tea chai green kombucha drink drinks beverage beverages tropicana minute maid oasis canaddry crush schweppes`,
   frozen: `frozen icecream ice cream gelato sorbet popsicle pizza pizzas fries nuggets waffles dumplings perogies pierogies samosa samosas paratha`,
   indian: `atta paneer ghee basmati masala dal daal chana rajma moong urad toor masoor besan jaggery gur pappadum papad poha suji sooji methi
-    hing ajwain kasuri amul mdh everest haldiram haldirams shan parle britannia mtr`,
+    hing ajwain kasuri amul mdh everest haldiram haldirams shan parle britannia mtr saag sarson`,
 };
 // Store brands / receipt prefixes that mean "food" when nothing else matches.
 const FOOD_PREFIXES = /\b(ks|kirkland|gv|great value|pc|president'?s choice|no name|compliments|selection|irresistibles|our finest|sunrype)\b/i;

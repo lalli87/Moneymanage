@@ -14,18 +14,19 @@ function loadTesseract() {
   return tessP;
 }
 // Downscale + grayscale: much faster and usually more accurate on phone photos.
-async function prep(file) {
+async function prep(file, hi = false) {
   const img = await createImageBitmap(file);
-  const scale = Math.min(1, 1800 / Math.max(img.width, img.height));
+  const scale = hi ? Math.min(2, 2400 / Math.max(img.width, img.height)) : Math.min(1, 1800 / Math.max(img.width, img.height));
   const c = document.createElement('canvas');
   c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
-  const g = c.getContext('2d'); g.filter = 'grayscale(1) contrast(1.4)';
+  const g = c.getContext('2d'); g.filter = hi ? 'grayscale(1) contrast(1.8)' : 'grayscale(1) contrast(1.4)';
+  g.imageSmoothingQuality = 'high';
   g.drawImage(img, 0, 0, c.width, c.height);
   return c;
 }
-export async function ocr(file, onProgress = () => {}) {
+export async function ocr(file, onProgress = () => {}, hi = false) {
   await loadTesseract();
-  const canvas = await prep(file);
+  const canvas = await prep(file, hi);
   // Read as one block of lines (page-segmentation mode 6) — keeps item names and prices on the same line.
   const w = await Tesseract.createWorker('eng', 1, { logger: m => { if (m.status === 'recognizing text') onProgress(m.progress); } });
   try { await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' }); const { data } = await w.recognize(canvas); return data.text; }
@@ -136,18 +137,38 @@ const NOT_ITEM = /sub-?\s*total|\btotal\b|\btax\b|\bhst\b|\bgst\b|\bpst\b|\bqst\
 // Receipt line → { desc, price, minus } — tolerant of OCR noise after the price ("7.09.", "4.00- H", "27.99 He",
 // "13.99 ..") and of misread decimal points ("6:00", "12 .99", "899" with the dot lost).
 function splitPrice(l) {
-  const m = l.match(/^(.*?)\s*(-?\$?)(\d{1,4})\s?[.,:;]\s?(\d{2})\s*(-?)\s*([^\d]{0,5})$/);
+  // Drop short noise after the price: tax codes and specks ("$1.66 C 5", "$2.99 HC", "$3.49 C =", "4.00- H")
+  for (let k = 0; k < 4; k++) { const t = l.match(/^(.*\d\s?[.,:;]{1,2}\s?\d{2}.*?)(?:(?<!\d\s?[.,:;]{1,2})\s+(?!-?\$?\d+[.,]\d{2})\S{1,3}|[^\w\s-]+)$/); if (!t) break; l = t[1].trim(); }
+  const m = l.match(/^(.*?)\s*(-?\$?)(\d{1,4})\s?[.,:;]{1,2}\s?(\d{2})\s*(-?)\s*([^\d]{0,5})$/);
   if (m && !/[A-Za-z]{3}/.test(m[6].replace(/^(he?|[a-z])\b/i, ''))) return { desc: m[1], price: +(m[3] + '.' + m[4]), minus: !!(m[5] || /-/.test(m[2])) };
   const n = l.match(/^(.*[A-Za-z].*?)\s+(\d{3,4})\s*([^\w]{0,3}|[A-Z]{1,2})$/);    // dot lost: "CAESAR 899"
   if (n && /\d{3,}\s+\S*[A-Za-z]/.test(n[1])) return { desc: n[1], price: +n[2] / 100, minus: false, guessed: true };
   return null;
 }
 const round2 = v => Math.round(v * 100) / 100;
+// Clean OCR specks out of an item name: "m © Lettuce" → "Lettuce", "Purp] e/Red" → "Purple/Red", "SWT MRJ" stays.
+// Second, sharper reading of the same photo: fill prices the first reading couldn't make out (matched by item code or name).
+export function fillMissing(first, second) {
+  const key = d => (d || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 8);
+  let n = 0;
+  for (const it of first.items.filter(i => i.noPrice || i.guessed)) {
+    const m = second.items.find(j => !j.noPrice && !j.guessed && j.amount > 0 && ((it.code && j.code === it.code) || (key(j.desc) && key(j.desc) === key(it.desc))));
+    if (m) { it.amount = m.amount; if (m.discount) it.discount = m.discount; delete it.noPrice; delete it.guessed; n++; }
+  }
+  return n;
+}
+const tidyName = d => d.replace(/(\w)\]\s?(\w)/g, '$1l$2').replace(/[|\[\]{}©®“”‘’"_~]/g, ' ').replace(/^(?:(?:[a-z]|[^A-Za-z0-9\s$]+)\s+)+/, '').replace(/\s+/g, ' ').trim();
 export function parseItems(text) {
   const items = []; let tax = 0, subtotal = null, total = null, pending = null;
   for (const raw of text.split(/\r?\n/)) {
     const l = raw.replace(/\s+/g, ' ').trim(); if (!l) continue;
-    if (/^\W*\d+\s*@/.test(l)) continue;                                   // "3 @ 6.09" quantity line
+    if (/^\W*\d+\s*@/.test(l) || /\d{1,2}:\d{2}:\d{2}|\b\d{2}\/\d{2}\/\d{2,4}\b/.test(l)) continue;   // quantity, date and time lines                                   // "3 @ 6.09" quantity line
+    // Weighed items: "0.455 kg @ $5.51/kg 2.51" — a price after the unit belongs to the item above; otherwise skip the line
+    if (/\d\s*(kg|lb)\b.*@|@.*\/\s*(kg|lb)/i.test(l)) {
+      const w = l.match(/\/\s*(?:kg|lb)\S*\s+(\d{1,4})\s?[.,:;]{1,2}\s?(\d{2})\b/i), li = items[items.length - 1];
+      if (w && li?.noPrice) { li.amount = +(w[1] + '.' + w[2]); delete li.noPrice; }
+      continue;
+    }
     let p = splitPrice(l);
     const lastIt = items[items.length - 1];
     if (p && !/[A-Za-z0-9]/.test(p.desc) && lastIt?.noPrice && !p.minus) { lastIt.amount = p.price; delete lastIt.noPrice; continue; }   // price on the next line
@@ -155,8 +176,8 @@ export function parseItems(text) {
     if (!p) {
       pending = /[A-Za-z]{3}/.test(l) && !NOT_ITEM.test(l) && !/\*{3}/.test(l) ? l : null;
       // "88426 CUCUMBERS . Bag" — an item whose price couldn't be read: keep it with no price so you only type the price
-      const im = pending && l.match(/^\W{0,3}(\d{4,7})\s+(.*[A-Za-z]{3}.*)$/);
-      if (im) { items.push({ desc: im[2].replace(/[|]/g, '').replace(/[^A-Za-z0-9%)]+\S{0,4}$/, '').trim(), amount: 0, code: im[1], noPrice: true }); pending = null; }
+      const im = pending && l.match(/^[^A-Za-z]{0,8}?(\d{4,14})\s+(.*[A-Za-z]{3}.*)$/);
+      if (im) { items.push({ desc: tidyName(im[2].replace(/(\s+[^\w\s]+)+$/, '').replace(/(\s+\S*[_?\d]\S*)+$/, '').replace(/\s+[a-z]{1,2}$/, '')), amount: 0, code: im[1], noPrice: true }); pending = null; }
       continue;
     }
     pending = null;
@@ -178,8 +199,8 @@ export function parseItems(text) {
       continue;
     }
     if (NOT_ITEM.test(desc) || letters.length < 2) continue;
-    const ic = desc.match(/(\d{3,7})\s+(?=\S*[A-Za-z])/);
-    const name = desc.replace(/[|]/g, ' ').replace(/\s+/g, ' ').replace(/^.{0,12}?\d{3,7}\s+(?=\S*[A-Za-z])/, '').replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9%)]+$/, '').trim() || desc;
+    const ic = desc.match(/(\d{3,14})\s+(?=\S*[A-Za-z])/);
+    const name = tidyName(desc).replace(/^.{0,12}?\d{3,7}\s+(?=\S*[A-Za-z])/, '').replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9%)]+$/, '').trim() || desc;
     items.push({ desc: name, amount: round2(amt), ...(ic ? { code: ic[1] } : {}), ...(p.guessed ? { guessed: true } : {}) });
   }
   // A misread SUBTOTAL line looks like one big item at the end: drop it.
@@ -189,6 +210,7 @@ export function parseItems(text) {
     if ((subtotal != null && Math.abs(last.amount - subtotal) < 0.01) || Math.abs(last.amount - rest) <= Math.max(0.05, rest * 0.25) && last.amount > 40 && !last.code) { items.pop(); subtotal = subtotal ?? last.amount; }
   }
   tax = round2(tax);
+  if (subtotal == null && total != null && items.length) subtotal = round2(total - tax);
   const np = items.filter(i => i.noPrice);
   if (np.length === 1 && subtotal != null) { const gap = round2(subtotal - items.reduce((a, i) => a + i.amount, 0)); if (gap > 0) np[0].amount = gap; }
   // The TOTAL is often printed white-on-black and unreadable: use subtotal + tax.
