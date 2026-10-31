@@ -67,7 +67,7 @@ async function init() {
   showLock();
   try { vault = await DB.getKV('vault'); } catch {}
   S = M.migrate((await DB.load()) || M.emptyState());
-  if (M.materialize(S) | autoCycles()) await DB.save(S);
+  if (M.materialize(S) | autoCycles() | M.fillIcons(S)) await DB.save(S);
   // With sync on, clean up duplicates only after merging the latest from Drive (doSync), never on stale data.
   if (!L.clientId) { const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await DB.save(S); setTimeout(() => toast(`Merged ${dd.categories + dd.groups + dd.accounts} duplicate categories/accounts`), 800); } }
   render(); showPending();
@@ -117,7 +117,7 @@ async function doSync(interactive = true) {
   try {
     S = M.migrate(await Sync.sync(S, L.clientId, interactive, codec));
     M.materialize(S);
-    const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts | autoCycles()) { await Sync.sync(S, L.clientId, false, codec).catch(() => {}); }
+    const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts | autoCycles() | M.fillIcons(S)) { await Sync.sync(S, L.clientId, false, codec).catch(() => {}); }
     await DB.save(S);
     L.lastSync = new Date().toISOString(); L.pending = false; saveLocal(); showPending();
     render();
@@ -188,7 +188,8 @@ function defaultAccount() {
 function txLabel(t) {
   if (t.type === 'transfer') return '↔ Transfer';
   if (t.type === 'mortgage') return t.prepayment ? '🏡 Prepayment' : '🏡 Mortgage';
-  if (t.splits?.length > 1) return `🧩 ${M.catLabel(S, t.splits[0].categoryId).replace(/^\S+\s/, '')} +${t.splits.length - 1}`;
+  if (t.splits?.length > 1) { const top = [...new Set(t.splits.map(x => { const c = M.get(S, 'categories', x.categoryId); return c?.parentId || c?.id; }))];
+    return top.length === 1 ? `${M.catLabel(S, top[0])} · split ${t.splits.length}` : `${M.catLabel(S, t.splits[0].categoryId)} +${t.splits.length - 1}`; }
   return M.catLabel(S, t.categoryId);
 }
 function txRow(t, splits = {}) {
@@ -326,7 +327,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.31-b';
+const APP_VERSION = '2026.10.31-c';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;

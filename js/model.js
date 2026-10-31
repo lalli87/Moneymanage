@@ -52,6 +52,24 @@ export function migrate(s) {
   return s;
 }
 
+// An icon for a category that has none, from its name (first match wins).
+const ICONS = [
+  [/grocer|supermarket|food basics/i, '🛒'], [/eat(ing)? out|restaurant|take ?out|dining|fast food/i, '🍜'], [/coffee|cafe|tim/i, '☕'], [/^food|meal/i, '🍽️'],
+  [/cloth|apparel|shoe|fashion/i, '👕'], [/household|home supplies|cleaning/i, '🧺'], [/home|house|furniture|repair|maint/i, '🏠'], [/rent|mortgage/i, '🏘️'],
+  [/utilit|hydro|electric|water|gas bill|heat/i, '💡'], [/phone|mobile|cell|internet|wifi/i, '📱'], [/car|auto|vehicle|fuel|gas|petrol|charging|ev\b|parking|transport|transit|uber|taxi/i, '🚗'],
+  [/insur/i, '🛡️'], [/health|medical|pharma|doctor|dental|drug/i, '💊'], [/fitness|gym|sport/i, '🏋️'], [/beauty|personal|salon|hair|cosmetic/i, '💄'],
+  [/kid|child|baby|school|daycare|educat|tuition|book/i, '🎒'], [/toy/i, '🧸'], [/pet|vet/i, '🐾'], [/gift|donat|charit/i, '🎁'], [/travel|vacation|hotel|flight|trip/i, '✈️'],
+  [/entertain|movie|stream|netflix|music|game|hobby/i, '🎬'], [/subscri/i, '🔁'], [/electronic|tech|computer|gadget|software/i, '💻'], [/shop|amazon|online|misc|general/i, '🛍️'],
+  [/tax|fee|bank|interest|charge/i, '🗂️'], [/loan|debt|credit/i, '💳'], [/saving|invest|rrsp|tfsa|resp/i, '📈'], [/salary|pay ?roll|wage|income|bonus/i, '💼'],
+  [/rental|tenant/i, '🔑'], [/business|office|work/i, '🏢'], [/garden|lawn|plant/i, '🪴'], [/alcohol|beer|wine|liquor|lcbo/i, '🍷'], [/cash|atm/i, '💵'],
+  [/refund|cashback|reward/i, '↩️'], [/other|uncategor/i, '📦'],
+];
+export const guessIcon = name => ICONS.find(([re]) => re.test(name || ''))?.[1] || '';
+export function fillIcons(s) {
+  let n = 0;
+  for (const c of live(s, 'categories')) if (!c.parentId && !c.emoji) { const e = guessIcon(c.name) || '📦'; c.emoji = e; put(s, 'categories', c); n++; }
+  return n;
+}
 export const live = (s, c) => s[c].filter(r => !r.deleted);
 export const get = (s, c, id) => (id ? s[c].find(r => r.id === id && !r.deleted) : undefined);
 export function put(s, c, rec) {
