@@ -351,7 +351,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.11.01-a';
+const APP_VERSION = '2026.11.01-b';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -964,7 +964,7 @@ function syncScreen() {
   const body = openSheet('Google Drive sync & backup', `
     <div class="hint">Your data is stored in a hidden app folder in <b>your</b> Google Drive (only MoneyBook can see it). Every device that signs in with the same Google account stays in sync.</div>
     <form id="f"><label>Google OAuth Client ID<input name="cid" value="${esc(L.clientId || '')}" placeholder="xxxxxxxx.apps.googleusercontent.com"></label>
-    <div class="hint">One-time setup — see the README. Authorized JavaScript origin must be <code>${esc(origin)}</code></div>
+    <div class="hint">${N.isNative ? 'Use the same <b>Web</b> client ID as on your computer. Sign-in uses your phone’s Google account.' : `One-time setup — see the README. Authorized JavaScript origin must be <code>${esc(origin)}</code>`}</div>
     <div class="row"><button class="primary">Save & sync now</button></div></form>
     <div class="hint">${L.lastSync ? 'Last sync: ' + new Date(L.lastSync).toLocaleString('en-CA') : 'Not synced yet on this device.'}</div>
     <div class="section-title">End-to-end encryption</div>
