@@ -43,10 +43,15 @@ function showPending() { $('#syncBtn')?.classList.toggle('pending', !!(L.clientI
 
 // ---------- boot ----------
 // ---------- theme (per device): 'system' | 'light' | 'dark' ----------
+// The Android app passes the phone's dark-mode state as ?night=1, because its built-in browser may report "light".
+function systemDark() {
+  let n = null; try { n = sessionStorage.getItem('mb_night'); } catch {}
+  return matchMedia('(prefers-color-scheme: dark)').matches || n === '1';
+}
 function applyTheme() {
   const t = L.theme || 'system';
-  if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
-  const dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  const dark = t === 'dark' || (t === 'system' && systemDark());
+  document.documentElement.dataset.theme = t === 'system' ? (dark ? 'dark' : 'light') : t;
   document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#1c1c1f' : '#ffffff');
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
@@ -327,7 +332,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.31-c';
+const APP_VERSION = '2026.10.31-d';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1930,7 +1935,7 @@ async function forceUpdate() {
   toast('Updating…');
   try { const regs = await navigator.serviceWorker?.getRegistrations() || []; await Promise.all(regs.map(r => r.unregister())); } catch {}
   try { const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); } catch {}
-  location.replace(location.pathname + '?u=' + Date.now());
+  location.replace(location.pathname + '?u=' + Date.now() + (sessionStorage.getItem('mb_night') ? '&night=' + sessionStorage.getItem('mb_night') : ''));
 }
 const actions = {
   tab: el => { tab = el.dataset.tab; render(); window.scrollTo(0, 0); },

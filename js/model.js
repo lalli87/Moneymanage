@@ -67,7 +67,7 @@ const ICONS = [
 export const guessIcon = name => ICONS.find(([re]) => re.test(name || ''))?.[1] || '';
 export function fillIcons(s) {
   let n = 0;
-  for (const c of live(s, 'categories')) if (!c.parentId && !c.emoji) { const e = guessIcon(c.name) || '📦'; c.emoji = e; put(s, 'categories', c); n++; }
+  for (const c of live(s, 'categories')) if (!c.parentId && !/\p{Extended_Pictographic}/u.test(c.emoji || '')) { const e = guessIcon(c.name) || '📦'; c.emoji = e; put(s, 'categories', c); n++; }
   return n;
 }
 export const live = (s, c) => s[c].filter(r => !r.deleted);

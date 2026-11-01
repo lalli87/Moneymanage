@@ -10,7 +10,7 @@
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="styles.css">
-<script>try{var t=JSON.parse(localStorage.getItem("mb_local")||"{}").theme;if(t&&t!=="system")document.documentElement.dataset.theme=t}catch(e){}</script>
+<script>try{var q=new URLSearchParams(location.search).get("night");if(q!==null)sessionStorage.setItem("mb_night",q);var n=sessionStorage.getItem("mb_night");var t=JSON.parse(localStorage.getItem("mb_local")||"{}").theme||"system";if(t==="system")t=(matchMedia("(prefers-color-scheme: dark)").matches||n==="1")?"dark":"";if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body>
 <header id="top">

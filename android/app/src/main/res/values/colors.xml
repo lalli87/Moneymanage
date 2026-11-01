@@ -2,4 +2,6 @@
 <resources>
   <color name="colorPrimary">#FFFFFF</color>
   <color name="navColor">#FFFFFF</color>
+  <color name="colorPrimaryDark">#1C1C1F</color>
+  <color name="navColorDark">#1C1C1F</color>
 </resources>
