@@ -1,11 +1,13 @@
 // Google sign-in (browser token flow), Drive appDataFolder sync, Calendar reminders.
 import { merge, get, occurrences, todayStr, addDays } from './model.js';
+import * as N from './native.js';
 
 const SCOPES = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.events';
 const FILE = 'moneybook.json';
 let token = null, tokenExp = 0, gisP;
 
 export function loadGis() {
+  if (N.isNative) return Promise.resolve();
   gisP = gisP || new Promise((res, rej) => {
     const sc = document.createElement('script');
     sc.src = 'https://accounts.google.com/gsi/client'; sc.async = true;
@@ -17,11 +19,13 @@ export function loadGis() {
 export const hasToken = () => token && Date.now() < tokenExp;
 export function signOut() {
   if (token && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(token, () => {});
+  if (N.isNative) N.googleSignOut();
   token = null; tokenExp = 0;
 }
 export async function getToken(clientId, interactive = true) {
   if (hasToken()) return token;
   if (!clientId) throw new Error('Add your Google OAuth Client ID in More › Sync first.');
+  if (N.isNative) { const r = await N.googleToken(clientId, SCOPES.split(' '), interactive); token = r.token; tokenExp = r.expiresAt; return token; }
   await loadGis();
   return new Promise((res, rej) => {
     const client = google.accounts.oauth2.initTokenClient({

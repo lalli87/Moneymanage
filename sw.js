@@ -1,7 +1,7 @@
 // Offline support. App files: always ask the server first (bypassing the browser's HTTP cache, so updates
 // arrive at once), fall back to the saved copy when offline. OCR engine: saved copy first.
-const CACHE = 'moneybook-v14';
-const ASSETS = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'js/app.js', 'js/model.js', 'js/db.js', 'js/sync.js', 'js/receipt.js', 'js/importer.js', 'js/insights.js', 'js/lock.js', 'js/crypto.js', 'js/grocery.js', 'vendor/pdfjs/pdf.min.js', 'vendor/pdfjs/pdf.worker.min.js', 'icons/icon-192.png', 'icons/icon-512.png'];
+const CACHE = 'moneybook-v15';
+const ASSETS = ['./', 'index.html', 'styles.css', 'manifest.webmanifest', 'js/app.js', 'js/model.js', 'js/db.js', 'js/sync.js', 'js/receipt.js', 'js/importer.js', 'js/insights.js', 'js/lock.js', 'js/crypto.js', 'js/grocery.js', 'js/native.js', 'vendor/capacitor/core.js', 'vendor/pdfjs/pdf.min.js', 'vendor/pdfjs/pdf.worker.min.js', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => Promise.all(ASSETS.map(u => fetch(new Request(u, { cache: 'reload' })).then(r => r.ok && c.put(u, r)).catch(() => {})))));
   self.skipWaiting();

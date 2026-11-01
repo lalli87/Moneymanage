@@ -1,0 +1,25 @@
+{
+  "name": "moneybook",
+  "private": true,
+  "version": "1.0.0",
+  "description": "MoneyBook — the web app (GitHub Pages) and the native Android app (Capacitor) from one codebase.",
+  "type": "module",
+  "scripts": {
+    "build:www": "node scripts/build-www.mjs",
+    "sync": "npm run build:www && npx cap sync android",
+    "android:apk": "npm run sync && cd native-android && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/local-notifications": "^8.3.1",
+    "@capacitor/share": "^8.0.3",
+    "@capgo/capacitor-social-login": "^8.7.5",
+    "@pantrist/capacitor-plugin-ml-kit-text-recognition": "^8.1.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0"
+  }
+}

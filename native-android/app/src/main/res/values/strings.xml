@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MoneyBook</string>
+    <string name="title_activity_main">MoneyBook</string>
+    <string name="package_name">ca.kamal.moneybook.app</string>
+    <string name="custom_url_scheme">ca.kamal.moneybook.app</string>
+</resources>

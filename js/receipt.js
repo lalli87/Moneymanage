@@ -1,3 +1,4 @@
+import * as N from './native.js';
 import { grocerySection, sectionCategory } from './grocery.js';
 // Receipt scanning: on-device OCR (Tesseract.js), parsing, and learned merchant rules.
 // "Training" = every saved expense teaches merchant → account + category.
@@ -37,6 +38,7 @@ export function cleanLines(lines) {
   }).join('\n');
 }
 export async function ocr(file, onProgress = () => {}, hi = false) {
+  if (N.isNative && !hi) { try { onProgress(0.5); const t = await N.readReceipt(file); onProgress(1); if (t.trim()) return t; } catch {} }
   await loadTesseract();
   const canvas = await prep(file, hi);
   // Read as one block of lines (page-segmentation mode 6) — keeps item names and prices on the same line.

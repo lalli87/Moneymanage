@@ -1,0 +1,82 @@
+name: Build MoneyBook Android app (Capacitor)
+
+# Builds the native Android app from the same web code and publishes MoneyBook-app.apk as a release.
+# Needs two repository secrets (Settings › Secrets and variables › Actions):
+#   MB_KEYSTORE_B64       the signing key, base64
+#   MB_KEYSTORE_PASSWORD  its password
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'js/**'
+      - 'index.html'
+      - 'styles.css'
+      - 'vendor/**'
+      - 'icons/**'
+      - 'native-android/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'capacitor.config.json'
+      - 'scripts/**'
+      - '.github/workflows/android-app.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-app
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Web app → Android project
+        run: |
+          npm ci --no-audit --no-fund
+          npm run sync
+      - name: Signing key (from encrypted secrets)
+        env:
+          KS_B64: ${{ secrets.MB_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then echo "::warning::No signing key secrets yet — building a test APK only (not published)."; echo "SIGNED=" >> $GITHUB_ENV; exit 0; fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/moneybook-app.p12"
+          echo "SIGNED=1" >> $GITHUB_ENV
+      - name: Build signed APK
+        working-directory: native-android
+        env:
+          KS_PATH: ${{ env.SIGNED && format('{0}/moneybook-app.p12', runner.temp) || '' }}
+          KS_PASS: ${{ secrets.MB_KEYSTORE_PASSWORD }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/MoneyBook-app.apk"
+          rm -f "$RUNNER_TEMP/moneybook-app.p12"
+      - name: Keep the test build
+        if: env.SIGNED != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoneyBook-app-test
+          path: MoneyBook-app.apk
+      - name: Publish release
+        if: env.SIGNED == '1'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: capapp-v${{ github.run_number }}
+          name: MoneyBook app — build ${{ github.run_number }}
+          make_latest: false
+          body: |
+            Native Android app (Capacitor), build ${{ github.run_number }}.
+            On the phone: download MoneyBook-app.apk and open it. Updates install over the top and keep your data.
+          files: MoneyBook-app.apk

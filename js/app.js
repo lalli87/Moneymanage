@@ -6,6 +6,7 @@ import * as I from './importer.js';
 import * as X from './insights.js';
 import * as Lk from './lock.js';
 import * as Cx from './crypto.js';
+import * as N from './native.js';
 
 // ---------- globals ----------
 let S;                                   // synced app state
@@ -76,7 +77,8 @@ async function init() {
   // With sync on, clean up duplicates only after merging the latest from Drive (doSync), never on stale data.
   if (!L.clientId) { const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await DB.save(S); setTimeout(() => toast(`Merged ${dd.categories + dd.groups + dd.accounts} duplicate categories/accounts`), 800); } }
   render(); showPending();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
+  if ('serviceWorker' in navigator && !N.isNative) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
+  N.onBack(() => { if (!$('#sheet').classList.contains('hidden')) { closeSheet(); return true; } if (tab !== 'trans') { tab = 'trans'; render(); return true; } return false; });
   if (L.clientId) Sync.loadGis().catch(() => {});
   notifyUpcoming();
   // New day while app stays open → post due items.
@@ -141,7 +143,24 @@ async function doSync(interactive = true) {
 }
 
 // ---------- reminders on this device ----------
+// Android app: schedule real notifications for the next 30 days (cards, bills to add, scheduled payments).
+function scheduleNative() {
+  const rd = S.settings.remindDays ?? 3, t0 = today(), list = [];
+  for (const c of X.cardStatuses(S)) if (c.remaining > 0.5 && c.status !== 'paid') {
+    for (const d of new Set([M.addDays(c.dueDate, -rd), M.addDays(c.dueDate, -1), c.dueDate]))
+      if (d >= t0) list.push({ date: d, title: `💳 ${c.account.name} payment due ${c.dueDate.slice(5)}`, body: `${fmt(c.remaining)} to pay${c.minPayment ? ` (minimum ${fmt(c.minPayment)})` : ''}` });
+  }
+  for (const b of X.billReminders(S, M.addDays(t0, 30), 0)) if (b.date >= t0)
+    list.push({ date: b.date, title: `🔌 Add ${b.recurring.template.note || 'bill'}`, body: `About ${fmt(b.recurring.template.amount)} — add it in MoneyBook` });
+  for (const x of M.projected(S, t0, M.addDays(t0, 30))) {
+    const d = M.addDays(x.date, -Math.min(rd, 1));
+    if (d >= t0) list.push({ date: d, title: `⏰ ${x.note || 'Payment'} ${x.date === d ? 'today' : 'tomorrow'}`, body: `${fmt(x.amount)} · ${M.accName(S, x.accountId)}` });
+  }
+  list.sort((a, b) => a.date.localeCompare(b.date));
+  N.scheduleReminders(list);
+}
 function notifyUpcoming() {
+  if (N.isNative) return scheduleNative();
   const days = S.settings.remindDays ?? 3;
   const due = M.projected(S, today(), M.addDays(today(), days));
   const cards = X.cardStatuses(S).filter(c => c.status === 'overdue' || (c.status === 'due' && c.daysLeft <= days));
@@ -332,7 +351,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.10.31-d';
+const APP_VERSION = '2026.11.01-a';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -534,7 +553,7 @@ function editTxn(t, preset = {}) {
       futureHint();
       const pi = R.parseItems(text);
       // Some prices unreadable? Read the photo once more at higher resolution and take the prices it finds.
-      if (pi.items.some(i => i.noPrice || i.guessed)) {
+      if (!N.isNative && pi.items.some(i => i.noPrice || i.guessed)) {
         msg('Some prices were hard to read — taking a closer look…');
         try { R.fillMissing(pi, R.parseItems(await R.ocr(file, p => msg(`Taking a closer look… ${Math.round(p * 100)}%`), true))); } catch {}
         const np = pi.items.filter(i => i.noPrice);
@@ -1032,6 +1051,7 @@ function encryptionSetup(change) {
   };
 }
 function download(name, text, type) {
+  if (N.isNative) return N.saveFile(name, text).catch(e => toast('Could not save: ' + e.message));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
@@ -1932,6 +1952,19 @@ new MutationObserver(muts => {
 // Fetch the newest app files now: drop the offline copy and the old service worker, then reload.
 // Your data is in IndexedDB and is not touched.
 async function forceUpdate() {
+  if (N.isNative) {
+    toast('Checking for a new version…');
+    try {
+      const [info, rel] = await Promise.all([N.appInfo(), fetch('https://api.github.com/repos/lalli87/Moneymanage/releases?per_page=10').then(r => r.json())]);
+      const latest = rel.filter(r => /^capapp-v\d+$/.test(r.tag_name)).sort((a, b) => +b.tag_name.slice(8) - +a.tag_name.slice(8))[0];
+      if (!latest) return toast('No app releases found');
+      const n = +latest.tag_name.slice(8), mine = +(info?.build || 0);
+      if (n <= mine) return toast(`You have the latest app (build ${mine}) ✓`);
+      const apk = latest.assets?.find(a => a.name.endsWith('.apk'));
+      if (confirm(`App build ${n} is available (you have ${mine}). Download it now?`)) location.href = apk?.browser_download_url || latest.html_url;
+    } catch (e) { toast('Could not check: ' + e.message); }
+    return;
+  }
   toast('Updating…');
   try { const regs = await navigator.serviceWorker?.getRegistrations() || []; await Promise.all(regs.map(r => r.unregister())); } catch {}
   try { const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); } catch {}
