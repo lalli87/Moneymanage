@@ -135,8 +135,8 @@ export const ITEM_HINTS = [
   ['clothing', /\b(shirt|tee|t-?shirt|jeans|pant|pants|short|shorts|sock|socks|dress|skirt|jacket|coat|hoodie|sweater|legging|bra|underwear|brief|boxer|pajama|pyjama|shoe|shoes|boot|boots|sandal|slipper|hat|cap|glove|mitt|scarf|apparel|girls|boys|mens|womens|ladies|kids? ?wear|george|athletic works|no boundaries)(?:e?s)?\b/i],
   ['school', /\b(notebook|note ?book|binder|pencil|pen|pens|crayon|marker|highlighter|eraser|glue|scissor|ruler|folder|paper pad|loose leaf|backpack|lunch ?box|stationery|sharpener|index card|sticky note|post-?it)(?:e?s)?\b/i],
   ['household', /\b(detergent|bleach|cleaner|lysol|clorox|dish ?soap|dawn|sponge|paper towel|bounty|toilet paper|bathroom tissue|bath tissue|facial tissue|tissue|kleenex|royale|scotties|charmin|cottonelle|napkin|garbage bag|trash bag|hefty|glad|foil|plastic wrap|ziploc|storage bag|light ?bulb|battery|batteries|duracell|energizer|laundry|tide|gain|downy|fabric|swiffer|mop|broom|candle|air freshener|container|organizer|hanger|vacuum|filter|kitchen|utensil|mug|plate|bowl|cup|towel|sheet|pillow)(?:e?s)?\b|towel/i],
-  ['personal', /\b(shampoo|conditioner|body ?wash|soap bar|toothpaste|toothbrush|floss|mouthwash|deodorant|razor|shave|lotion|sunscreen|cosmetic|makeup|lipstick|nail|hair|tampon|pad|diaper|wipes|cotton|q-?tip|colgate|crest|dove|gillette|nivea|vaseline)(?:e?s)?\b/i],
-  ['health', /\b(vitamin|tylenol|advil|motrin|aspirin|allergy|reactine|claritin|cough|cold|medicine|pharmacy|rx|bandage|band-?aid|thermometer|supplement|probiotic|omega)(?:e?s)?\b/i],
+  ['personal', /\b(shampoo|conditioner|body ?wash|soap bar|toothpaste|toothbrush|floss|mouthwash|deodorant|razor|shave|lotion|sunscreen|cosmetic|makeup|lipstick|lip ?balm|chapstick|blistex|eos|carmex|burt'?s bees|nail|hair|tampon|pad|diaper|wipes|cotton|q-?tip|colgate|crest|dove|gillette|nivea|vaseline)(?:e?s)?\b/i],
+  ['health', /\b(vitamin|tylenol|advil|motrin|aspirin|allergy|reactine|claritin|cough|cold|medicine|ricola|halls|lozenge|lozenges|throat|strepsils|vicks|buckley|neocitran|pharmacy|rx|bandage|band-?aid|thermometer|supplement|probiotic|omega)(?:e?s)?\b/i],
   ['kids', /\b(toy|toys|lego|barbie|hot wheels|puzzle|game|doll|plush|crayola|play-?doh|nerf|stroller|baby|infant|toddler)(?:e?s)?\b/i],
   ['electronics', /\b(charger|cable|usb|hdmi|headphone|earbud|earphone|phone case|screen protector|adapter|electronic|speaker|mouse|keyboard|memory card|sd card|flash drive|ink|toner|printer)(?:e?s)?\b/i],
   ['pets', /\b(dog|cat|puppy|kitten|pet|litter|kibble|purina|pedigree|whiskas|iams)(?:e?s)?\b/i],
@@ -152,6 +152,9 @@ export const HINT_CATEGORIES = {
   kids: ['toys', 'kids', 'children'], electronics: ['electronics', 'tech', 'gadgets'], pets: ['pets', 'pet'], auto: ['car maintenance', 'maintenance & tires', 'car', 'transport'],
   garden: ['garden', 'home'], gift: ['gifts', 'gift'],
 };
+// Store address and loyalty/promotion lines are never items.
+const ADDRESS = /\b[A-Z]\d[A-Z]\s?\d[A-Z]\d?\b|\b(street|st\.?|avenue|ave|road|rd|blvd|boulevard|drive|dr|highway|hwy|suite|unit)\b.*,|,\s*(on|ontario|bc|ab|qc|mb|sk|ns|nb)\b/i;
+const PROMO = /save up to|you could|next visit|redeem|points?\b|optimum|scene\+?|air ?miles|survey|contest|win!?\b|certificate|member ?#|balance\b/i;
 const NOT_ITEM = /sub-?\s*total|\btotal\b|\btax\b|\bhst\b|\bgst\b|\bpst\b|\bqst\b|change|cash|visa|master|debit|credit|amex|tend|payment|balance|saving|you saved|discount|coupon|points|rewards|approved|auth|ref\b|tran|account|card ?#|items? sold|thank/i;
 // Receipt line → { desc, price, minus } — tolerant of OCR noise after the price ("7.09.", "4.00- H", "27.99 He",
 // "13.99 ..") and of misread decimal points ("6:00", "12 .99", "899" with the dot lost).
@@ -181,7 +184,8 @@ export function parseItems(text) {
   const items = []; let tax = 0, subtotal = null, total = null, pending = null;
   for (const raw of text.split(/\r?\n/)) {
     const l = raw.replace(/\s+/g, ' ').trim(); if (!l) continue;
-    if (/^\W*\d+\s*@/.test(l) || /\d{1,2}:\d{2}:\d{2}|\b\d{2}\/\d{2}\/\d{2,4}\b/.test(l)) continue;   // quantity, date and time lines                                   // "3 @ 6.09" quantity line
+    if (/^\W*\d+\s*@/.test(l) || /\d{1,2}:\d{2}:\d{2}|\b\d{2}\/\d{2}\/\d{2,4}\b|\b\d{1,2}:\d{2}\s?[AP]\.?M\b|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+20\d{2}/i.test(l)) continue;   // quantity, date and time lines
+    if (ADDRESS.test(l) || PROMO.test(l)) continue;   // quantity, date and time lines                                   // "3 @ 6.09" quantity line
     // Weighed items: "0.455 kg @ $5.51/kg 2.51" — a price after the unit belongs to the item above; otherwise skip the line
     if (/\d\s*(kg|lb)\b.*@|@.*\/\s*(kg|lb)/i.test(l)) {
       const w = l.match(/\/\s*(?:kg|lb)\S*\s+(\d{1,4})\s?[.,:;]{1,2}\s?(\d{2})\b/i), li = items[items.length - 1];
@@ -219,7 +223,7 @@ export function parseItems(text) {
     }
     if (NOT_ITEM.test(desc) || letters.length < 2) continue;
     const ic = desc.match(/(\d{3,14})\s+(?=\S*[A-Za-z])/);
-    const name = tidyName(desc).replace(/^.{0,12}?\d{3,7}\s+(?=\S*[A-Za-z])/, '').replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9%)]+$/, '').trim() || desc;
+    const name = tidyName(desc.replace(/\s*\$?\d{1,4}[.,]\d{2}\s*[A-Z]{0,3}\s*$/, '')).replace(/^.{0,12}?\d{3,7}\s+(?=\S*[A-Za-z])/, '').replace(/^[^A-Za-z0-9]+/, '').replace(/[^A-Za-z0-9%)]+$/, '').trim() || desc;
     items.push({ desc: name, amount: round2(amt), ...(ic ? { code: ic[1] } : {}), ...(p.guessed ? { guessed: true } : {}) });
   }
   // A misread SUBTOTAL line looks like one big item at the end: drop it.
