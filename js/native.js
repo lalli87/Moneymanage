@@ -9,6 +9,7 @@ const Notes = registerPlugin('LocalNotifications');
 const Files = registerPlugin('Filesystem');
 const Share = registerPlugin('Share');
 const App = registerPlugin('App');
+const SystemTheme = registerPlugin('SystemTheme');
 
 // ---------- Google sign-in (Android's own account picker; Google blocks its web sign-in inside apps) ----------
 let inited = null;
@@ -80,3 +81,10 @@ export async function scheduleReminders(list) {
 // ---------- Android back button closes the open sheet first ----------
 export function onBack(fn) { if (isNative) App.addListener('backButton', () => { if (!fn()) App.exitApp(); }); }
 export async function appInfo() { try { return await App.getInfo(); } catch { return null; } }
+
+// Phone dark mode on/off, now and whenever it changes (MainActivity's small SystemTheme plugin).
+export function watchNight(fn) {
+  if (!isNative) return;
+  SystemTheme.get().then(r => fn(!!r.night)).catch(() => {});
+  SystemTheme.addListener('change', r => fn(!!r.night)).catch?.(() => {});
+}

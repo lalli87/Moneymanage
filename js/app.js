@@ -19,7 +19,9 @@ const fmt = n => { const v = +n || 0; return (v < 0 ? '-' : '') + '$' + Math.abs
 const sfmt = n => { const v = Math.abs(+n || 0); return v >= 1000 ? '$' + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : '$' + Math.round(v); };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const COLORS = ['#ec7563', '#f2a05b', '#f5cd5f', '#d4e157', '#8bd47a', '#6fd3c9', '#78a9e8', '#a88be8', '#e88bc8', '#b0b0b5'];
+// Chart colours: income in greens and blues, expenses in a varied warm-to-cool set.
+const COLORS_EXP = ['#f2705e', '#f59e0b', '#8b5cf6', '#ec4899', '#0ea5e9', '#14b8a6', '#eab308', '#6366f1', '#84cc16', '#94a3b8'];
+const COLORS_INC = ['#10b981', '#0ea5e9', '#22c55e', '#06b6d4', '#3b82f6', '#14b8a6', '#84cc16', '#6366f1', '#2dd4bf', '#94a3b8'];
 const today = () => M.todayStr();
 const cap = s => s[0].toUpperCase() + s.slice(1);
 
@@ -45,15 +47,18 @@ function showPending() { $('#syncBtn')?.classList.toggle('pending', !!(L.clientI
 // ---------- boot ----------
 // ---------- theme (per device): 'system' | 'light' | 'dark' ----------
 // The Android app passes the phone's dark-mode state as ?night=1, because its built-in browser may report "light".
+let nativeNight = null;   // Android app: the phone's own dark-mode switch (more reliable than the web view's report)
 function systemDark() {
+  if (N.isNative && nativeNight != null) return nativeNight;
   let n = null; try { n = sessionStorage.getItem('mb_night'); } catch {}
   return matchMedia('(prefers-color-scheme: dark)').matches || n === '1';
 }
+N.watchNight(v => { nativeNight = v; applyTheme(); });
 function applyTheme() {
   const t = L.theme || 'system';
   const dark = t === 'dark' || (t === 'system' && systemDark());
   document.documentElement.dataset.theme = t === 'system' ? (dark ? 'dark' : 'light') : t;
-  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#1c1c1f' : '#ffffff');
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#1a1b2e' : '#ffffff');
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 
@@ -327,7 +332,7 @@ function viewStats() {
   const total = rows.reduce((a, [, v]) => a + v, 0);
   let h = monthNav() + `<div class="seg"><button data-act="statsType" data-type="income" class="${statsType === 'income' ? 'on' : ''}">Income</button><button data-act="statsType" data-type="expense" class="${statsType === 'expense' ? 'on' : ''}">Expenses</button></div>`;
   if (!rows.length) return h + '<div class="empty">No data for this month.</div>' + (statsType === 'expense' ? budgetBars(from, to) : '');
-  let acc = 0;
+  let acc = 0; const COLORS = statsType === 'income' ? COLORS_INC : COLORS_EXP;
   const stops = rows.map(([, v], i) => { const a = acc; acc += v / total * 100; return `${COLORS[i % COLORS.length]} ${a}% ${acc}%`; });
   h += `<div class="pie" style="background:conic-gradient(${stops.join(',')})"><b>${fmt(total)}</b></div><div class="list">`;
   rows.forEach(([id, v], i) => {
@@ -372,7 +377,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.11.07-a';
+const APP_VERSION = '2026.11.07-b';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
