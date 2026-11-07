@@ -180,6 +180,24 @@ export function fillMissing(first, second) {
   return n;
 }
 const tidyName = d => d.replace(/(\w)\]\s?(\w)/g, '$1l$2').replace(/[|\[\]{}©®“”‘’"_~]/g, ' ').replace(/^(?:(?:[a-z]|[^A-Za-z0-9\s$]+)\s+)+/, '').replace(/\s+/g, ' ').trim();
+// Some stores print the price after the discount and then "Saving 3.00" underneath (Food Basics, FreshCo);
+// others print the full price and then the discount (Costco). Whichever reading makes the items add up to the
+// receipt's subtotal wins — all discounts, none, or (for a mix) the combination that matches.
+export function reconcileDiscounts(items, target) {
+  const d = items.filter(i => i.discount);
+  if (target == null || !d.length) return;
+  const sum = () => round2(items.reduce((a, i) => a + i.amount, 0));
+  const ok = v => Math.abs(v - target) < 0.015;
+  const base = sum();
+  if (ok(base)) return;
+  const undo = list => list.forEach(i => { i.amount = round2(i.amount + i.discount); i.saving = i.discount; delete i.discount; });
+  const all = round2(d.reduce((a, i) => a + i.discount, 0));
+  if (ok(base + all)) return undo(d);
+  if (d.length <= 12) for (let mask = 1; mask < 1 << d.length; mask++) {
+    let add = 0; d.forEach((i, k) => { if (mask & (1 << k)) add += i.discount; });
+    if (ok(base + add)) return undo(d.filter((_, k) => mask & (1 << k)));
+  }
+}
 export function parseItems(text) {
   const items = []; let tax = 0, subtotal = null, total = null, pending = null;
   for (const raw of text.split(/\r?\n/)) {
@@ -187,10 +205,11 @@ export function parseItems(text) {
     if (/^\W*\d+\s*@/.test(l) || /\d{1,2}:\d{2}:\d{2}|\b\d{2}\/\d{2}\/\d{2,4}\b|\b\d{1,2}:\d{2}\s?[AP]\.?M\b|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+20\d{2}/i.test(l)) continue;   // quantity, date and time lines
     if (ADDRESS.test(l) || PROMO.test(l)) continue;   // quantity, date and time lines                                   // "3 @ 6.09" quantity line
     // Weighed items: "0.455 kg @ $5.51/kg 2.51" — a price after the unit belongs to the item above; otherwise skip the line
-    if (/\d\s*(kg|lb)\b.*@|@.*\/\s*(kg|lb)/i.test(l)) {
+    if (/\d\s*(kg|lb)\b.*@|@.*\/\s*(kg|lb)|^\W*-?\d+[.,]\d{2,3}\s*(kg|lb)\b/i.test(l)) {
       const w = l.match(/\/\s*(?:kg|lb)\S*\s+(\d{1,4})\s?[.,:;]{1,2}\s?(\d{2})\b/i), li = items[items.length - 1];
       if (w && li?.noPrice) { li.amount = +(w[1] + '.' + w[2]); delete li.noPrice; }
-      continue;
+      else if (w && pending) { items.push({ desc: tidyName(pending), amount: +(w[1] + '.' + w[2]) }); pending = null; }   // "PREMIUM BANANA" / "0.880 kg @ $1.52/kg 1.34"
+      continue;                                                                                     // gross / tare lines keep the name waiting
     }
     let p = splitPrice(l);
     const lastIt = items[items.length - 1];
@@ -204,7 +223,7 @@ export function parseItems(text) {
       continue;
     }
     pending = null;
-    const amt = p.price * (p.minus ? -1 : 1), desc = p.desc.trim();
+    const amt = p.price * (p.minus ? -1 : 1), desc = p.desc.trim().replace(/(?<=[A-Za-z])0|0(?=[A-Za-z])/g, 'O');
     const letters = desc.replace(/[^a-z]/gi, '');
     if (((/(h|g|p|q)st\b|\btax\b|\b(5|13|15|9\.975|14\.975)\s?%/i.test(desc)) || /^[t1il]?ax$/i.test(letters)) && !/before tax/i.test(desc)) { if (Math.abs(amt) < 1000) tax += amt; continue; }
     if (/\b(amount|amt|purchase|approved|change due)\b\s*:?/i.test(desc) && letters.length <= 12) { total = Math.max(total ?? 0, amt); continue; }
@@ -217,8 +236,10 @@ export function parseItems(text) {
       /\b(tpd|inst(ant)?\s*sav\w*|savings?|discount|disc|coupon|cpn|promo|rebate|mfr)\b/i.test(desc);
     if (isDisc) {
       const off = Math.abs(amt);
-      const target = (code && items.find(i => i.code === code[1] && i.amount > off)) || [...items].reverse().find(i => i.amount > off);
+      const prev = items[items.length - 1];
+      const target = (code && items.find(i => i.code === code[1] && i.amount > off)) || (prev && prev.amount > off ? prev : null);
       if (target) { target.amount = round2(target.amount - off); target.discount = round2((target.discount || 0) + off); }
+      else if (prev) prev.saving = round2((prev.saving || 0) + off);                                 // bigger than the price: only a "you saved" note
       continue;
     }
     if (NOT_ITEM.test(desc) || letters.length < 2) continue;
@@ -234,6 +255,7 @@ export function parseItems(text) {
   }
   tax = round2(tax);
   if (subtotal == null && total != null && items.length) subtotal = round2(total - tax);
+  reconcileDiscounts(items, subtotal);
   const np = items.filter(i => i.noPrice);
   if (np.length === 1 && subtotal != null) { const gap = round2(subtotal - items.reduce((a, i) => a + i.amount, 0)); if (gap > 0) np[0].amount = gap; }
   // The TOTAL is often printed white-on-black and unreadable: use subtotal + tax.

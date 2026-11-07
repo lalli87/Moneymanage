@@ -244,29 +244,50 @@ function render() {
   $('#view').innerHTML = { trans: viewTrans, calendar: viewCalendar, stats: viewStats, accounts: viewAccounts, more: viewMore }[tab]();
 }
 
+// Transactions: Month view (today first; the rest of the month's scheduled payments folded at the top) or Day view.
+let dayCursor = null;
+const dayGroup = (d, list, splits) => {
+  const dt = M.parseYmd(d), real = list.filter(t => !t.projected), sm = M.sumIE(real);
+  return `<div class="day" id="day-${d}"><div class="dayhead"><span class="d">${dt.getDate()}</span><span class="wd">${WD[dt.getDay()]}</span><small class="sub2">${d.slice(0, 7)}${d === today() ? ' · <b>Today</b>' : ''}</small><span class="sp"></span>
+    <span class="amt inc">${sm.inc ? fmt(sm.inc) : ''}</span><span class="amt exp">${sm.exp ? fmt(sm.exp) : ''}</span></div>
+    ${list.map(t => txRow(t, splits)).join('')}</div>`;
+};
 function viewTrans() {
-  const [from, to] = monthRange(); const t0 = today();
+  const mode = L.transView || 'month', t0 = today();
+  const seg = `<div class="seg" style="margin-bottom:0"><button data-act="tview" data-v="day" class="${mode === 'day' ? 'on' : ''}">Day</button><button data-act="tview" data-v="month" class="${mode === 'month' ? 'on' : ''}">Month</button></div>`;
+  const { map: splits } = M.mortgageSplits(S);
+  if (mode === 'day') {
+    const d = dayCursor || t0, dt = M.parseYmd(d);
+    const posted = d <= t0 ? M.live(S, 'transactions').filter(t => t.date === d) : [];
+    const list = [...posted, ...M.projected(S, d, d)];
+    const { inc, exp } = M.sumIE(posted);
+    let h = seg + `<div class="monthnav"><button data-act="dayNav" data-n="-1" aria-label="Previous day">‹</button><b>${WD[dt.getDay()]} ${MONTHS[dt.getMonth()]} ${dt.getDate()}, ${dt.getFullYear()}</b><button data-act="dayNav" data-n="1" aria-label="Next day">›</button></div>`;
+    if (d !== t0) h += `<div style="text-align:center;margin:-4px 0 6px"><button class="secondary" data-act="dayNav" data-n="0" style="padding:6px 14px">Today</button></div>`;
+    h += `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
+    if (d === t0) h += attentionHtml();
+    h += list.length ? dayGroup(d, list, splits) : '<div class="empty">Nothing on this day.<br>Tap + to add one.</div>';
+    return h;
+  }
+  const [from, to] = monthRange();
   const posted = M.live(S, 'transactions').filter(t => t.date >= from && t.date <= to && t.date <= t0);
   const proj = M.projected(S, from, to);
   const { inc, exp } = M.sumIE(posted);
-  const { map: splits } = M.mortgageSplits(S);
   const days = S.settings.remindDays ?? 3;
   const soon = M.projected(S, t0, M.addDays(t0, days));
   const soonTotal = soon.reduce((a, t) => a + (t.type === 'income' ? 0 : +t.amount), 0);
   const byDay = {};
   [...posted, ...proj].forEach(t => (byDay[t.date] = byDay[t.date] || []).push(t));
   const dates = Object.keys(byDay).sort().reverse();
-  let h = monthNav() + `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
+  const later = dates.filter(d => d > t0), upto = dates.filter(d => d <= t0);
+  let h = seg + monthNav() + `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
   h += attentionHtml();
   if (soon.length) h += `<div class="banner">⏰ <b>${soon.length} upcoming</b> in the next ${days} days — ${fmt(soonTotal)}. Not deducted from balances until the due date.</div>`;
   if (!dates.length) h += '<div class="empty">No transactions this month.<br>Tap + to add one.</div>';
-  for (const d of dates) {
-    const list = byDay[d]; const dt = M.parseYmd(d);
-    const real = list.filter(t => !t.projected); const s = M.sumIE(real);
-    h += `<div class="day"><div class="dayhead"><span class="d">${dt.getDate()}</span><span class="wd">${WD[dt.getDay()]}</span><small class="sub2">${d.slice(0, 7)}</small><span class="sp"></span>
-      <span class="amt inc">${s.inc ? fmt(s.inc) : ''}</span><span class="amt exp">${s.exp ? fmt(s.exp) : ''}</span></div>
-      ${list.map(t => txRow(t, splits)).join('')}</div>`;
-  }
+  if (later.length && upto.length) {
+    const n = later.reduce((a, d) => a + byDay[d].length, 0), amt = later.reduce((a, d) => a + byDay[d].reduce((x, t) => x + (t.type === 'expense' ? +t.amount : 0), 0), 0);
+    h += `<details class="later"><summary>⏰ Later this month — ${n} scheduled${amt ? ', ' + fmt(amt) : ''}</summary>${later.map(d => dayGroup(d, byDay[d], splits)).join('')}</details>`;
+  } else h += later.map(d => dayGroup(d, byDay[d], splits)).join('');
+  h += upto.map(d => dayGroup(d, byDay[d], splits)).join('');
   return h;
 }
 
@@ -351,7 +372,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.11.02-a';
+const APP_VERSION = '2026.11.07-a';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -393,8 +414,8 @@ function editTxn(t, preset = {}) {
   const body = openSheet(isNew ? 'Add transaction' : 'Edit transaction', `
     <div class="seg" id="ttype">${['expense', 'income', 'transfer', 'mortgage'].map(x => `<button type="button" data-type="${x}" class="${t.type === x ? 'on' : ''}">${cap(x)}</button>`).join('')}</div>
     <form id="f">
-      <div class="f-scan"><button type="button" id="scanBtn" class="secondary" style="width:100%">📷 Scan receipt</button>
-        <input type="file" id="scanFile" accept="image/*" capture="environment" hidden><div id="scanMsg" class="hint"></div></div>
+      <div class="f-scan"><div class="btnrow" style="padding:0"><button type="button" id="scanBtn" class="secondary">📷 Scan</button><button type="button" id="picBtn" class="secondary">🖼️ Photo</button><button type="button" id="pdfBtn" class="secondary">📄 PDF</button></div>
+        <input type="file" id="scanFile" accept="image/*" capture="environment" hidden><input type="file" id="picFile" accept="image/*" hidden><input type="file" id="pdfFile" accept="application/pdf,.pdf" hidden><div id="scanMsg" class="hint"></div></div>
       <div class="two"><label>Date<input type="date" name="date" value="${t.date}" required></label>
       <label>Amount<input type="text" inputmode="decimal" data-money autocomplete="off" name="amount" value="${t.amount}" required></label></div>
       <label class="f-acc"><span class="lbl-acc">Account</span><select name="accountId">${accountOptions(t.accountId)}</select></label>
@@ -470,7 +491,7 @@ function editTxn(t, preset = {}) {
     const sum = M.round2(items.reduce((a, x) => a + (+x.amount || 0), 0)), gap = M.round2(amt() - sum - itemTax);
     el.innerHTML = `<small>${items.length} item${items.length === 1 ? '' : 's'} — edit any name, price or category; the split follows (categories are remembered next time)</small>` +
       items.map((it, i) => `<div style="display:grid;grid-template-columns:1fr 84px 34px;gap:4px 6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)" data-it="${i}">
-        <div><input data-k="idesc" placeholder="Item name" value="${esc(it.desc || '')}" style="margin:0;padding:6px;font-size:13px">${it.discount ? ` <span class="pill">−${fmt(it.discount)} discount</span>` : ''}${it.guessed || it.noPrice ? ' <span class="pill" style="background:var(--sched);color:#fff">check price</span>' : ''}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</div>
+        <div><input data-k="idesc" placeholder="Item name" value="${esc(it.desc || '')}" style="margin:0;padding:6px;font-size:13px">${it.discount ? ` <span class="pill">−${fmt(it.discount)} discount</span>` : ''}${it.saving ? ` <span class="pill" style="opacity:.7">saved ${fmt(it.saving)}</span>` : ''}${it.guessed || it.noPrice ? ' <span class="pill" style="background:var(--sched);color:#fff">check price</span>' : ''}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</div>
         <input data-k="iamt" type="text" inputmode="decimal" data-money autocomplete="off" value="${(+it.amount).toFixed(2)}" style="margin:0;padding:6px;font-size:13px;text-align:right">
         <button type="button" class="secondary" data-k="ix" style="padding:6px 0;margin:0" aria-label="Remove item">✕</button>
         <select data-k="icat" style="grid-column:1/4;margin:0;padding:6px;font-size:13px">${categoryOptions('expense', it.categoryId)}</select></div>`).join('') +
@@ -537,11 +558,25 @@ function editTxn(t, preset = {}) {
   // receipt scanning
   const msg = s => (body.querySelector('#scanMsg').textContent = s);
   body.querySelector('#scanBtn').onclick = () => body.querySelector('#scanFile').click();
+  body.querySelector('#picBtn').onclick = () => body.querySelector('#picFile').click();
+  body.querySelector('#pdfBtn').onclick = () => body.querySelector('#pdfFile').click();
+  // Receipt from the camera, a saved photo or a PDF (e-receipt, or a scanned PDF which is read like a photo).
+  const receiptText = async file => {
+    if (/pdf$/i.test(file.type) || /\.pdf$/i.test(file.name)) {
+      msg('Reading PDF receipt…');
+      const ocrCanvas = async (c, pr) => R.ocr(await new Promise(res => c.toBlob(res, 'image/png')), pr);
+      const { lines } = await I.readPdf(file, p => msg(`Reading PDF receipt… ${Math.round(p * 100)}%`), ocrCanvas);
+      return lines.map(l => (typeof l === 'string' ? l : l.text)).join('\n');
+    }
+    msg(N.isNative ? 'Reading receipt…' : 'Reading receipt… (first scan downloads the OCR engine, ~10 MB)');
+    return R.ocr(file, p => msg(`Reading receipt… ${Math.round(p * 100)}%`));
+  };
+  body.querySelector('#picFile').onchange = body.querySelector('#pdfFile').onchange = e => body.querySelector('#scanFile').onchange(e);
   body.querySelector('#scanFile').onchange = async e => {
     const file = e.target.files[0]; if (!file) return;
-    msg('Reading receipt… (first scan downloads the OCR engine, ~10 MB)');
+    const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name);
     try {
-      const text = await R.ocr(file, p => msg(`Reading receipt… ${Math.round(p * 100)}%`));
+      const text = await receiptText(file);
       const r = R.parseReceipt(text);
       if (r.total) f.amount.value = r.total.toFixed(2);
       if (r.date) f.date.value = r.date;
@@ -553,7 +588,7 @@ function editTxn(t, preset = {}) {
       futureHint();
       const pi = R.parseItems(text);
       // Some prices unreadable? Read the photo once more at higher resolution and take the prices it finds.
-      if (!N.isNative && pi.items.some(i => i.noPrice || i.guessed)) {
+      if (!N.isNative && !isPdf && pi.items.some(i => i.noPrice || i.guessed)) {
         msg('Some prices were hard to read — taking a closer look…');
         try { R.fillMissing(pi, R.parseItems(await R.ocr(file, p => msg(`Taking a closer look… ${Math.round(p * 100)}%`), true))); } catch {}
         const np = pi.items.filter(i => i.noPrice);
@@ -601,7 +636,7 @@ function editTxn(t, preset = {}) {
       if (lines.length > 1) { rec.splits = lines.map(x => ({ categoryId: x.categoryId, amount: M.round2(+x.amount) })).sort((a, b) => b.amount - a.amount); rec.categoryId = rec.splits[0].categoryId; }
       else if (lines.length === 1) rec.categoryId = lines[0].categoryId;
       (items || []).filter(i => i.changed && i.categoryId && i.desc).forEach(i => R.learnItem(S, i.desc, i.categoryId));
-      if (items?.length) { rec.items = items.map(i => ({ desc: i.desc || '', amount: M.round2(+i.amount || 0), categoryId: i.categoryId || '', ...(i.discount ? { discount: i.discount } : {}) })); rec.itemTax = itemTax || undefined; }
+      if (items?.length) { rec.items = items.map(i => ({ desc: i.desc || '', amount: M.round2(+i.amount || 0), categoryId: i.categoryId || '', ...(i.discount ? { discount: i.discount } : {}), ...(i.saving ? { saving: i.saving } : {}) })); rec.itemTax = itemTax || undefined; }
     }
     rec.mortgageId = t.type === 'mortgage' ? f.mortgageId.value : undefined;
     rec.prepayment = t.type === 'mortgage' ? f.prepayment.checked : undefined;
@@ -1973,6 +2008,8 @@ async function forceUpdate() {
 const actions = {
   tab: el => { tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   prevMonth: () => { cursor.setMonth(cursor.getMonth() - 1); render(); },
+  tview: el => { L.transView = el.dataset.v; saveLocal(); if (el.dataset.v === 'day') dayCursor = today(); render(); },
+  dayNav: el => { const n = +el.dataset.n; dayCursor = n ? M.addDays(dayCursor || today(), n) : today(); const dd = M.parseYmd(dayCursor); cursor.setFullYear(dd.getFullYear(), dd.getMonth(), 1); render(); },
   nextMonth: () => { cursor.setMonth(cursor.getMonth() + 1); render(); },
   addTxn: () => editTxn(),
   editTxn: el => editTxn(M.get(S, 'transactions', el.dataset.id)),
