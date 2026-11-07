@@ -22,10 +22,20 @@ export function signOut() {
   if (N.isNative) N.googleSignOut();
   token = null; tokenExp = 0;
 }
+// Android app: the Google account you sync with, remembered so the account picker doesn't come up every time.
+export const account = () => { try { return localStorage.getItem('mb_gacct') || ''; } catch { return ''; } };
+const setAccount = e => { try { localStorage.setItem('mb_gacct', e); } catch {} };
+export async function chooseAccount(clientId) {
+  const r = await N.googleToken(clientId, SCOPES.split(' '), true, '', true);
+  token = r.token; tokenExp = r.expiresAt; if (r.email) setAccount(r.email); return r.email;
+}
 export async function getToken(clientId, interactive = true) {
   if (hasToken()) return token;
   if (!clientId) throw new Error('Add your Google OAuth Client ID in More › Sync first.');
-  if (N.isNative) { const r = await N.googleToken(clientId, SCOPES.split(' '), interactive); token = r.token; tokenExp = r.expiresAt; return token; }
+  if (N.isNative) {
+    const r = await N.googleToken(clientId, SCOPES.split(' '), interactive, account());
+    token = r.token; tokenExp = r.expiresAt; if (r.email) setAccount(r.email); return token;
+  }
   await loadGis();
   return new Promise((res, rej) => {
     const client = google.accounts.oauth2.initTokenClient({

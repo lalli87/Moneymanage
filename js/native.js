@@ -13,16 +13,22 @@ const SystemTheme = registerPlugin('SystemTheme');
 
 // ---------- Google sign-in (Android's own account picker; Google blocks its web sign-in inside apps) ----------
 let inited = null;
-export async function googleToken(webClientId, scopes, interactive) {
+const DriveAuth = registerPlugin('DriveAuth');
+// Silent first: a token for the account you sync with (no picker). Only if Google needs you to confirm,
+// or no account is chosen yet, does the account picker appear. Returns the account's email too.
+export async function googleToken(webClientId, scopes, interactive, email, choose = false) {
+  if (email && !choose) {
+    try { const r = await DriveAuth.token({ email, scopes }); if (r?.token) return { token: r.token, expiresAt: Date.now() + 50 * 60000, email }; }
+    catch (e) { if (!interactive) throw e; }
+  }
+  if (!interactive) throw new Error('Sign-in needed');
   if (inited !== webClientId) { await SocialLogin.initialize({ google: { webClientId, mode: 'online' } }); inited = webClientId; }
-  const r = await SocialLogin.login({
-    provider: 'google',
-    options: interactive ? { scopes } : { scopes, style: 'bottom', filterByAuthorizedAccounts: true, autoSelectEnabled: true },
-  });
+  if (choose) { try { await SocialLogin.logout({ provider: 'google' }); } catch {} }
+  const r = await SocialLogin.login({ provider: 'google', options: { scopes, ...(choose ? { forcePrompt: true } : {}) } });
   const at = r?.result?.accessToken;
   if (!at?.token) throw new Error('Google did not return access — check the Android sign-in setup.');
   const exp = at.expires ? Date.parse(at.expires) : NaN;
-  return { token: at.token, expiresAt: Number.isFinite(exp) ? exp - 60000 : Date.now() + 50 * 60000 };
+  return { token: at.token, expiresAt: Number.isFinite(exp) ? exp - 60000 : Date.now() + 50 * 60000, email: r?.result?.profile?.email || email || '' };
 }
 export async function googleSignOut() { try { await SocialLogin.logout({ provider: 'google' }); } catch {} }
 

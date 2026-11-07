@@ -37,7 +37,7 @@ function commit() {
   saveTimer = setTimeout(async () => {
     await DB.save(S);
     if (L.clientId) { L.pending = true; saveLocal(); showPending(); }
-    if (Sync.hasToken()) doSync(false).catch(() => {});
+    if (Sync.hasToken() || (N.isNative && Sync.account())) doSync(false).catch(() => {});
     else if (L.clientId && !showPending.told) { showPending.told = true; toast('Saved on this device — tap ⟳ to send it to your other devices', 4000); }
   }, 500);
 }
@@ -377,7 +377,7 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.11.07-b';
+const APP_VERSION = '2026.11.07-c';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1004,7 +1004,8 @@ function syncScreen() {
   const body = openSheet('Google Drive sync & backup', `
     <div class="hint">Your data is stored in a hidden app folder in <b>your</b> Google Drive (only MoneyBook can see it). Every device that signs in with the same Google account stays in sync.</div>
     <form id="f"><label>Google OAuth Client ID<input name="cid" value="${esc(L.clientId || '')}" placeholder="xxxxxxxx.apps.googleusercontent.com"></label>
-    <div class="hint">${N.isNative ? 'Use the same <b>Web</b> client ID as on your computer. Sign-in uses your phone’s Google account.' : `One-time setup — see the README. Authorized JavaScript origin must be <code>${esc(origin)}</code>`}</div>
+    ${N.isNative && Sync.account() ? `<div class="row" style="align-items:center;gap:8px;margin:6px 0"><span style="flex:1">Syncs with <b>${esc(Sync.account())}</b></span><button type="button" class="secondary" id="chAcct" style="padding:6px 12px">Change account</button></div>` : ''}
+      <div class="hint">${N.isNative ? 'Use the same <b>Web</b> client ID as on your computer. Sign-in uses your phone’s Google account.' : `One-time setup — see the README. Authorized JavaScript origin must be <code>${esc(origin)}</code>`}</div>
     <div class="row"><button class="primary">Save & sync now</button></div></form>
     <div class="hint">${L.lastSync ? 'Last sync: ' + new Date(L.lastSync).toLocaleString('en-CA') : 'Not synced yet on this device.'}</div>
     <div class="section-title">End-to-end encryption</div>
@@ -1052,7 +1053,11 @@ function syncScreen() {
       };
     } catch (err) { toast('Not a valid backup: ' + err.message); }
   };
-  body.querySelector('#out').onclick = () => { Sync.signOut(); toast('Signed out'); };
+  body.querySelector('#out').onclick = () => { Sync.signOut(); try { localStorage.removeItem('mb_gacct'); } catch {} toast('Signed out'); closeSheet(); };
+  body.querySelector('#chAcct')?.addEventListener('click', async () => {
+    try { const e = await Sync.chooseAccount(L.clientId); toast('Now syncing with ' + e); closeSheet(); await doSync(true); }
+    catch (err) { toast('Account not changed: ' + err.message); }
+  });
   body.querySelector('#encOn')?.addEventListener('click', () => encryptionSetup(false));
   body.querySelector('#encChg')?.addEventListener('click', () => encryptionSetup(true));
   body.querySelector('#encOff')?.addEventListener('click', async () => {

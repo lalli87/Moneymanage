@@ -15,6 +15,7 @@ public class MainActivity extends BridgeActivity implements ModifiedMainActivity
   @Override
   public void onCreate(Bundle savedInstanceState) {
     registerPlugin(SystemThemePlugin.class);
+    registerPlugin(DriveAuthPlugin.class);
     super.onCreate(savedInstanceState);
   }
 
