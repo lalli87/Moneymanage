@@ -1,13 +1,13 @@
 :root {
   --bg: #f4f4fa; --card: #fff; --ink: #1c1b2e; --mute: #85849a; --line: #e5e4f0;
-  --accent: #5b5bd6; --accent2: #8b5cf6; --inc: #0e9f6e; --exp: #e5604d; --xfer: #6b6b80; --sched: #b07d00;
+  --accent: #5b5bd6; --accent2: #8b5cf6; --inc: #1f6fe5; --exp: #e4572e; --xfer: #6b6b80; --sched: #b07d00;
   --radius: 14px; --safe-b: env(safe-area-inset-bottom, 0px);
 }
 /* Theme: follows the phone/PC setting unless Settings forces Light or Dark */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --bg: #0f1020; --card: #1a1b2e; --ink: #ecebf8; --mute: #9b9ab3; --line: #2b2c45; --accent: #8b8bf5; --accent2: #a78bfa; --inc: #34d399; --exp: #f2826f; --sched: #e0b84a; color-scheme: dark; }
+  :root:not([data-theme="light"]) { --bg: #0f1020; --card: #1a1b2e; --ink: #ecebf8; --mute: #9b9ab3; --line: #2b2c45; --accent: #8b8bf5; --accent2: #a78bfa; --inc: #5aa9ff; --exp: #ff8a50; --sched: #e0b84a; color-scheme: dark; }
 }
-:root[data-theme="dark"] { --bg: #0f1020; --card: #1a1b2e; --ink: #ecebf8; --mute: #9b9ab3; --line: #2b2c45; --accent: #8b8bf5; --accent2: #a78bfa; --inc: #34d399; --exp: #f2826f; --sched: #e0b84a; color-scheme: dark; }
+:root[data-theme="dark"] { --bg: #0f1020; --card: #1a1b2e; --ink: #ecebf8; --mute: #9b9ab3; --line: #2b2c45; --accent: #8b8bf5; --accent2: #a78bfa; --inc: #5aa9ff; --exp: #ff8a50; --sched: #e0b84a; color-scheme: dark; }
 :root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }

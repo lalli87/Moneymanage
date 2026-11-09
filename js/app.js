@@ -19,9 +19,9 @@ const fmt = n => { const v = +n || 0; return (v < 0 ? '-' : '') + '$' + Math.abs
 const sfmt = n => { const v = Math.abs(+n || 0); return v >= 1000 ? '$' + (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : '$' + Math.round(v); };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-// Chart colours: income in greens and blues, expenses in a varied warm-to-cool set.
+// Chart colours: income in blues (no greens — easy to tell from the warm expense colours with red-green colour blindness).
 const COLORS_EXP = ['#f2705e', '#f59e0b', '#8b5cf6', '#ec4899', '#0ea5e9', '#14b8a6', '#eab308', '#6366f1', '#84cc16', '#94a3b8'];
-const COLORS_INC = ['#10b981', '#0ea5e9', '#22c55e', '#06b6d4', '#3b82f6', '#14b8a6', '#84cc16', '#6366f1', '#2dd4bf', '#94a3b8'];
+const COLORS_INC = ['#3b82f6', '#0ea5e9', '#6366f1', '#06b6d4', '#1d4ed8', '#38bdf8', '#818cf8', '#0891b2', '#93c5fd', '#94a3b8'];
 const today = () => M.todayStr();
 const cap = s => s[0].toUpperCase() + s.slice(1);
 
@@ -380,7 +380,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.09-a';
+const APP_VERSION = '2026.11.09-b';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1652,9 +1652,19 @@ function budgetsScreen() {
   const cats = M.live(S, 'categories').filter(c => c.type === 'expense' && !c.parentId).sort((a, b) => (top[b.id] || 0) - (top[a.id] || 0));
   const body = openSheet('Monthly budgets', `
     <div class="hint">Set a monthly limit for the categories you want to watch. Progress shows on the Stats tab, and “Needs attention” warns you at 90%. This month so far is shown for each.</div>
+    <div class="pad" id="budTot" style="padding:8px 16px"></div>
     <form id="f"><div class="list">${cats.map(c => `<div class="li"><div class="grow">${esc((c.emoji || '') + ' ' + c.name)}<small>${MONTHS[cursor.getMonth()]}: ${fmt(top[c.id] || 0)}${st[c.id] ? ` · ${Math.round(st[c.id].pct * 100)}%` : ''}</small></div>
       <input name="b_${c.id}" type="text" inputmode="decimal" data-money autocomplete="off" value="${c.budget || ''}" placeholder="—" style="width:110px;margin:0"></div>`).join('')}</div>
     <div class="sticky-bar"><button class="primary" style="width:100%">Save budgets</button></div></form>`);
+  const showTot = () => {
+    let budget = 0, spent = 0;
+    for (const c of cats) { const v = +body.querySelector(`[name="b_${c.id}"]`).value || 0; if (v) { budget += v; spent += top[c.id] || 0; } }
+    const pct = budget ? spent / budget : 0;
+    body.querySelector('#budTot').innerHTML = budget ? `<div style="display:flex;justify-content:space-between"><b>Total monthly budget</b><b>${fmt(budget)}</b></div>
+      <div class="bar" style="height:10px"><i style="width:${Math.min(100, pct * 100).toFixed(1)}%;background:${pct >= 1 ? 'var(--exp)' : pct >= 0.9 ? 'var(--sched)' : 'var(--inc)'}"></i></div>
+      <small>${MONTHS[cursor.getMonth()]}: ${fmt(spent)} used (${Math.round(pct * 100)}%) · ${budget - spent >= 0 ? fmt(budget - spent) + ' left' : fmt(spent - budget) + ' over'}</small>` : '<small>No budgets set yet.</small>';
+  };
+  body.querySelector('#f').addEventListener('input', showTot); showTot();
   body.querySelector('#f').onsubmit = e => {
     e.preventDefault();
     for (const c of cats) {
@@ -1664,10 +1674,23 @@ function budgetsScreen() {
     closeSheet(); commit(); toast('Budgets saved');
   };
 }
+// The whole month: everything you budgeted, how much of it is used, and where the month is.
+function budgetTotalHtml(bs, from, to) {
+  const budget = M.round2(bs.reduce((a, b) => a + b.budget, 0)), spent = M.round2(bs.reduce((a, b) => a + Math.min(b.spent, Infinity), 0));
+  const left = M.round2(budget - spent), pct = budget ? spent / budget : 0, t0 = today();
+  const d0 = M.parseYmd(from), dim = new Date(d0.getFullYear(), d0.getMonth() + 1, 0).getDate();
+  const elapsed = t0 >= to ? 1 : t0 < from ? 0 : M.parseYmd(t0).getDate() / dim;
+  const col = pct >= 1 ? 'var(--exp)' : pct >= 0.9 || pct > elapsed + 0.15 ? 'var(--sched)' : 'var(--inc)';
+  const allExp = M.sumIE(M.live(S, 'transactions').filter(t => t.date >= from && t.date <= to && t.date <= t0)).exp;
+  return `<div class="li" style="display:block;border-bottom:2px solid var(--line)">
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><b>Total budget</b><b class="${pct >= 1 ? 'exp' : ''}">${fmt(spent)} / ${fmt(budget)}</b></div>
+    <div class="bar" style="height:10px;position:relative"><i style="width:${Math.min(100, pct * 100).toFixed(1)}%;background:${col}"></i>${elapsed > 0 && elapsed < 1 ? `<span title="Today" style="position:absolute;left:${(elapsed * 100).toFixed(1)}%;top:-3px;bottom:-3px;width:2px;background:var(--ink);opacity:.6"></span>` : ''}</div>
+    <small>${Math.round(pct * 100)}% used · ${left >= 0 ? fmt(left) + ' left' : fmt(-left) + ' over'}${elapsed > 0 && elapsed < 1 ? ` · ${Math.round(elapsed * 100)}% of the month gone` : ''}<br>All spending this month: ${fmt(allExp)}${allExp > spent + 0.5 ? ` (${fmt(allExp - spent)} in categories without a budget)` : ''}</small></div>`;
+}
 function budgetBars(from, to) {
   const bs = X.budgetStatus(S, from, to); if (!bs.length) return '<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="budgets">🎯 Set monthly budgets</button></div>';
   const col = { over: 'var(--exp)', near: 'var(--sched)', fast: 'var(--sched)', ok: 'var(--inc)' };
-  return `<div class="section-title">Budgets</div><div class="list">${bs.map(b => `<div class="li" style="display:block">
+  return `<div class="section-title">Budgets</div><div class="list">${budgetTotalHtml(bs, from, to)}${bs.map(b => `<div class="li" style="display:block">
     <div style="display:flex;justify-content:space-between"><span>${esc((b.category.emoji || '') + ' ' + b.category.name)}</span><span class="${b.status === 'over' ? 'exp' : ''}">${fmt(b.spent)} / ${fmt(b.budget)}</span></div>
     <div class="bar"><i style="width:${Math.min(100, b.pct * 100).toFixed(1)}%;background:${col[b.status]}"></i></div>
     <small>${b.status === 'over' ? `${fmt(-b.left)} over` : `${fmt(b.left)} left`}${b.status === 'fast' ? ' · spending faster than the month' : ''}</small></div>`).join('')}</div>
