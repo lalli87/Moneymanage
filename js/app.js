@@ -377,7 +377,10 @@ function viewAccounts() {
   return h + `<div class="btnrow" style="margin-top:12px"><button class="secondary" data-act="forecast">📈 60-day forecast</button></div><div class="btnrow"><button class="secondary" data-act="manageAccounts">⚙️ Manage accounts & groups</button></div>`;
 }
 
-const APP_VERSION = '2026.11.07-c';
+// MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
+// device can just "Sign in with Google".
+const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
+const APP_VERSION = '2026.11.09-a';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1003,10 +1006,12 @@ function syncScreen() {
   const origin = location.origin;
   const body = openSheet('Google Drive sync & backup', `
     <div class="hint">Your data is stored in a hidden app folder in <b>your</b> Google Drive (only MoneyBook can see it). Every device that signs in with the same Google account stays in sync.</div>
-    <form id="f"><label>Google OAuth Client ID<input name="cid" value="${esc(L.clientId || '')}" placeholder="xxxxxxxx.apps.googleusercontent.com"></label>
+    <form id="f">
     ${N.isNative && Sync.account() ? `<div class="row" style="align-items:center;gap:8px;margin:6px 0"><span style="flex:1">Syncs with <b>${esc(Sync.account())}</b></span><button type="button" class="secondary" id="chAcct" style="padding:6px 12px">Change account</button></div>` : ''}
-      <div class="hint">${N.isNative ? 'Use the same <b>Web</b> client ID as on your computer. Sign-in uses your phone’s Google account.' : `One-time setup — see the README. Authorized JavaScript origin must be <code>${esc(origin)}</code>`}</div>
-    <div class="row"><button class="primary">Save & sync now</button></div></form>
+    <div class="row"><button class="primary">${L.clientId ? 'Sync now' : 'Sign in with Google & sync'}</button></div>
+    <details style="margin-top:6px"><summary class="hint" style="cursor:pointer">Advanced: MoneyBook's Google app ID</summary>
+      <label>Google OAuth Client ID<input name="cid" value="${esc(L.clientId || DEFAULT_CLIENT_ID)}" placeholder="xxxxxxxx.apps.googleusercontent.com"></label>
+      <div class="hint">Built in — only change it if you set up your own Google Cloud project.${N.isNative ? '' : ` Its authorized JavaScript origin must include <code>${esc(origin)}</code>.`}</div></details></form>
     <div class="hint">${L.lastSync ? 'Last sync: ' + new Date(L.lastSync).toLocaleString('en-CA') : 'Not synced yet on this device.'}</div>
     <div class="section-title">End-to-end encryption</div>
     <div class="pad hint" style="padding-top:0">${vault ? '🔐 <b>On.</b> Your sync file and new backups are encrypted on this device before upload — Google, or anyone who gets into your Google account, sees only scrambled data.' : '<b>Off.</b> Turn on to encrypt your sync file and backups with a passphrase only you know.'}</div>
@@ -1018,7 +1023,7 @@ function syncScreen() {
     <div class="row"><button class="danger" id="out">Sign out of Google on this device</button></div>`);
   const f = body.querySelector('#f');
   f.onsubmit = async e => {
-    e.preventDefault(); L.clientId = fv(f, 'cid'); saveLocal();
+    e.preventDefault(); L.clientId = fv(f, 'cid') || DEFAULT_CLIENT_ID; saveLocal();
     try { await doSync(true); syncScreen(); } catch {}
   };
   body.querySelector('#exp').onclick = () => download(`moneybook-backup-${today()}.json`, JSON.stringify(S, null, 1), 'application/json');
