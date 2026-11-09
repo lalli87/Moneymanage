@@ -380,7 +380,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.09-b';
+const APP_VERSION = '2026.11.09-c';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -2025,6 +2025,7 @@ new MutationObserver(muts => {
 // Fetch the newest app files now: drop the offline copy and the old service worker, then reload.
 // Your data is in IndexedDB and is not touched.
 async function forceUpdate() {
+  if (N.isNative && document.documentElement.dataset.store === 'play') { location.href = 'https://play.google.com/store/apps/details?id=ca.kamal.moneybook.app'; return; }
   if (N.isNative) {
     toast('Checking for a new version…');
     try {

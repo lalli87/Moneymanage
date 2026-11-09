@@ -31,6 +31,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      HAS_PLAY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -62,13 +64,19 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon assembleRelease
           cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/MoneyBook-app.apk"
+          # Google Play edition: same app, updates come from the Play Store instead of GitHub
+          (cd "$GITHUB_WORKSPACE" && STORE=play npm run build:www && npx cap copy android)
+          ./gradlew --no-daemon bundleRelease
+          cp app/build/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/MoneyBook-play.aab"
           rm -f "$RUNNER_TEMP/moneybook-app.p12"
       - name: Keep the test build
         if: env.SIGNED != '1'
         uses: actions/upload-artifact@v4
         with:
           name: MoneyBook-app-test
-          path: MoneyBook-app.apk
+          path: |
+            MoneyBook-app.apk
+            MoneyBook-play.aab
       - name: Publish release
         if: env.SIGNED == '1'
         uses: softprops/action-gh-release@v2
@@ -79,4 +87,16 @@ jobs:
           body: |
             Native Android app (Capacitor), build ${{ github.run_number }}.
             On the phone: download MoneyBook-app.apk and open it. Updates install over the top and keep your data.
-          files: MoneyBook-app.apk
+            MoneyBook-play.aab is the Google Play edition (uploaded to Play's internal testing track).
+          files: |
+            MoneyBook-app.apk
+            MoneyBook-play.aab
+      - name: Send to Google Play (internal testing)
+        if: env.SIGNED == '1' && env.HAS_PLAY == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ca.kamal.moneybook.app
+          releaseFiles: MoneyBook-play.aab
+          track: internal
+          status: completed

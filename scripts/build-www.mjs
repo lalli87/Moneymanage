@@ -6,5 +6,5 @@ for (const f of ['index.html', 'styles.css', 'manifest.webmanifest', 'js', 'vend
 // The Capacitor runtime is injected by the native shell; nothing else to change.
 const html = readFileSync('www/index.html', 'utf8');
 // Let the app shell keep the page clear of the status and navigation bars.
-writeFileSync('www/index.html', html.replace('<html', '<html data-native="1"').replace(',viewport-fit=cover', ''));
+writeFileSync('www/index.html', html.replace('<html', `<html data-native="1"${process.env.STORE ? ` data-store="${process.env.STORE}"` : ''}`).replace(',viewport-fit=cover', ''));
 console.log('www/ ready');
