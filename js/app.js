@@ -44,6 +44,7 @@ function commit() {
   }, 500);
 }
 // Red dot on ⟳ while this device has changes that haven't reached Google Drive yet.
+function showAsk() { const b = $('#askBtn'); if (b) b.hidden = !A.enabled(); }
 function showPending() { $('#syncBtn')?.classList.toggle('pending', !!(L.clientId && L.pending)); }
 
 // ---------- boot ----------
@@ -83,7 +84,7 @@ async function init() {
   if (M.materialize(S) | autoCycles() | M.fillIcons(S)) await DB.save(S);
   // With sync on, clean up duplicates only after merging the latest from Drive (doSync), never on stale data.
   if (!L.clientId) { const dd = M.dedupe(S); if (dd.categories || dd.groups || dd.accounts) { await DB.save(S); setTimeout(() => toast(`Merged ${dd.categories + dd.groups + dd.accounts} duplicate categories/accounts`), 800); } }
-  render(); showPending();
+  render(); showPending(); setTimeout(showAsk);
   if ('serviceWorker' in navigator && !N.isNative) navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(r => r.update()).catch(() => {});
   N.onBack(() => { if (!$('#sheet').classList.contains('hidden')) { closeSheet(); return true; } if (tab !== 'trans') { tab = 'trans'; render(); return true; } return false; });
   if (L.clientId) Sync.loadGis().catch(() => {});
@@ -382,7 +383,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.12-a';
+const APP_VERSION = '2026.11.12-b';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1702,19 +1703,21 @@ function aiScreen() {
       toast('Checking the key…');
       try { await A.testKey(key); } catch (err) { saveLocal(); return toast(err.message, 6000); }
     }
-    L.aiKey = key || undefined; saveLocal(); closeSheet(); render(); toast(key ? '✨ AI assistant is on' : 'Saved');
+    L.aiKey = key || undefined; saveLocal(); closeSheet(); render(); showAsk(); toast(key ? '✨ AI assistant is on' : 'Saved');
   };
-  body.querySelector('#rm')?.addEventListener('click', () => { if (confirm('Remove the Claude API key from this device?')) { delete L.aiKey; saveLocal(); closeSheet(); render(); toast('AI assistant off'); } });
+  body.querySelector('#rm')?.addEventListener('click', () => { if (confirm('Remove the Claude API key from this device?')) { delete L.aiKey; saveLocal(); closeSheet(); render(); showAsk(); toast('AI assistant off'); } });
 }
 let askHistory = [];
 function askScreen() {
   if (!A.enabled()) return aiScreen();
   const body = openSheet('Ask MoneyBook', `
-    <div id="chat" style="display:flex;flex-direction:column;gap:8px;padding:4px 0 8px">${askHistory.length ? '' : `<div class="hint">Ask about your spending, income, cards, budgets or upcoming payments. Answers are worked out from your own data.<br><br>Try:<br>• How much did I spend eating out this year vs last year?<br>• What are my biggest expense categories this month?<br>• Which card payments are due this week?<br>• What did I spend at Costco in the last 3 months?</div>`}</div>
+    <div id="chat" style="display:flex;flex-direction:column;gap:8px;padding:4px 0 8px">${askHistory.length ? '' : `<div class="hint">Ask anything about your spending, income, cards, budgets or upcoming payments — answers are worked out from your own data. Tap one to try:</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${['How much did I spend in the past 2 days?', 'What are my biggest expenses this month?', 'Which card payments are due this week?', 'How much did I spend at Costco in the last 3 months?', 'Eating out this year vs last year?', 'Am I on track with my budgets?'].map(q => `<button type="button" class="secondary qchip" style="padding:6px 10px;font-size:13px;margin:0">${q}</button>`).join('')}</div>`}</div>
     <form id="f" class="sticky-bar" style="display:flex;gap:6px"><input name="q" placeholder="Ask a question…" autocomplete="off" style="margin:0;flex:1"><button class="primary" style="margin:0;padding:0 16px">Ask</button></form>`);
   const chat = body.querySelector('#chat');
   const bubble = (text, me) => { const d = document.createElement('div'); d.style.cssText = `align-self:${me ? 'flex-end' : 'flex-start'};max-width:88%;padding:10px 12px;border-radius:14px;white-space:pre-wrap;line-height:1.45;${me ? 'background:var(--accent);color:#fff' : 'background:var(--card);border:1px solid var(--line)'}`; d.textContent = text; chat.appendChild(d); d.scrollIntoView({ block: 'end' }); return d; };
   for (const m of askHistory) if (typeof m.content === 'string') bubble(m.content, m.role === 'user');
+  chat.addEventListener('click', e => { const c = e.target.closest('.qchip'); if (c) { body.querySelector('#f').elements.q.value = c.textContent; body.querySelector('#f').requestSubmit(); } });
   body.querySelector('#f').onsubmit = async e => {
     e.preventDefault(); const q = e.target.elements.q.value.trim(); if (!q) return;
     e.target.elements.q.value = ''; bubble(q, true); const wait = bubble('✨ Looking through your data…', false);
