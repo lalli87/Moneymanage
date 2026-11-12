@@ -48,7 +48,7 @@ const catList = S => M.live(S, 'categories').filter(c => !c.hidden).map(c => {
   const p = c.parentId ? M.get(S, 'categories', c.parentId) : null;
   return { id: c.id, type: c.type, name: p ? `${p.name} › ${c.name}` : c.name };
 });
-const accList = S => M.live(S, 'accounts').filter(a => !a.hidden).map(a => ({ id: a.id, name: a.name, kind: M.get(S, 'groups', a.groupId)?.kind || '', last4: (a.numbers || []).map(n => String(n).slice(-4)) }));
+const accList = S => M.live(S, 'accounts').filter(a => !a.hidden).map(a => ({ id: a.id, name: a.name, kind: M.get(S, 'groups', a.groupId)?.kind || '', last4: [...new Set([a.numbers, a.cardLast4].filter(Boolean).join(',').split(/[,;\s]+/).map(n => n.replace(/\D/g, '').slice(-4)).filter(n => n.length === 4))] }));
 
 async function imagePart(file) {
   const img = await createImageBitmap(file);
