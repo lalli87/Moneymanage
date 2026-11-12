@@ -7,6 +7,7 @@ import * as X from './insights.js';
 import * as Lk from './lock.js';
 import * as Cx from './crypto.js';
 import * as N from './native.js';
+import * as A from './ai.js';
 
 // ---------- globals ----------
 let S;                                   // synced app state
@@ -27,6 +28,7 @@ const cap = s => s[0].toUpperCase() + s.slice(1);
 
 function loadLocal() { try { return JSON.parse(localStorage.getItem('mb_local')) || {}; } catch { return {}; } }
 function saveLocal() { try { localStorage.setItem('mb_local', JSON.stringify(L)); } catch {} }
+setTimeout(() => A.init(L, saveLocal));
 function toast(msg, ms = 2600) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), ms); }
 
 let saveTimer;
@@ -380,7 +382,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.09-c';
+const APP_VERSION = '2026.11.12-a';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -394,12 +396,14 @@ function viewMore() {
     ${item('suggestions', '✨', 'Smart suggestions', 'Duplicate schedules, regular bills not yet scheduled')}
     ${item('forecast', '📈', 'Cash-flow forecast', 'Next 60 days for each bank account')}
     ${item('budgets', '🎯', 'Monthly budgets')}
+    ${A.enabled() ? item('askScreen', '💬', 'Ask MoneyBook', 'Questions about your money, answered from your data') : ''}
     ${item('taxReports', '🧾', 'Rental & business reports', 'Tax-year totals, rental share, HST')}
     ${item('importStatement', '📥', 'Import statement, CSV or screenshots', 'PDF statements, bank CSV files, banking-app screenshots')}
     ${item('dupScan', '🧹', 'Find duplicate entries', 'Clean up anything recorded twice')}
   </div><div class="menu">
     ${item('syncScreen', '☁️', 'Google Drive sync & backup', L.lastSync ? 'Last sync ' + new Date(L.lastSync).toLocaleString('en-CA') : 'Not set up')}
     ${item('settings', '⚙️', 'Settings & reminders')}
+    ${item('aiScreen', '✨', 'AI assistant (Claude)', A.enabled() ? `On · this month ${L.aiUsage?.month === new Date().toISOString().slice(0, 7) ? '$' + L.aiUsage.cost.toFixed(3) : '$0.000'}` : 'Off — add your API key')}
     ${item('lockSettings', '🔒', 'App lock', L.lock?.pinHash ? (L.lock.credId ? 'PIN + fingerprint' : 'PIN') : 'Off')}
     ${item('backupsScreen', '🗂️', 'Drive backups', 'Weekly copies, restore')}
   </div><div class="pad hint" style="text-align:center">MoneyBook version <b>${APP_VERSION}</b><br><button class="secondary" data-act="forceUpdate" style="margin-top:8px;padding:8px 14px">🔄 Check for updates</button></div><div class="pad hint">MoneyBook keeps your data on this device and in a private app folder in your own Google Drive. Nothing is sent anywhere else.</div>`;
@@ -422,6 +426,7 @@ function editTxn(t, preset = {}) {
   const body = openSheet(isNew ? 'Add transaction' : 'Edit transaction', `
     <div class="seg" id="ttype">${['expense', 'income', 'transfer', 'mortgage'].map(x => `<button type="button" data-type="${x}" class="${t.type === x ? 'on' : ''}">${cap(x)}</button>`).join('')}</div>
     <form id="f">
+      ${isNew && A.enabled() ? `<div class="f-ai" style="display:flex;gap:6px;margin-bottom:8px"><input id="aiText" placeholder="✨ Type it: 45.20 Costco on CIBC card yesterday" style="margin:0;flex:1" autocomplete="off"><button type="button" id="aiGo" class="secondary" style="margin:0;padding:0 14px">Fill</button></div><div id="aiMsg" class="hint"></div>` : ''}
       <div class="f-scan"><div class="btnrow" style="padding:0"><button type="button" id="scanBtn" class="secondary">📷 Scan</button><button type="button" id="picBtn" class="secondary">🖼️ Photo</button><button type="button" id="pdfBtn" class="secondary">📄 PDF</button></div>
         <input type="file" id="scanFile" accept="image/*" capture="environment" hidden><input type="file" id="picFile" accept="image/*" hidden><input type="file" id="pdfFile" accept="application/pdf,.pdf" hidden><div id="scanMsg" class="hint"></div></div>
       <div class="two"><label>Date<input type="date" name="date" value="${t.date}" required></label>
@@ -465,6 +470,27 @@ function editTxn(t, preset = {}) {
     body.querySelectorAll('.f-cat').forEach(e => e.classList.toggle('hidden-f', ty === 'transfer' || ty === 'mortgage' || (ty === 'expense' && splitOn)));
     body.querySelector('.lbl-acc').textContent = ty === 'transfer' ? 'From account' : ty === 'mortgage' ? 'Paid from' : 'Account';
     f.categoryId.innerHTML = categoryOptions(ty === 'income' ? 'income' : 'expense', t.categoryId);
+  }
+  const aiGo = body.querySelector('#aiGo');
+  if (aiGo) {
+    const run = async () => {
+      const txt = body.querySelector('#aiText').value.trim(); if (!txt) return;
+      const m = body.querySelector('#aiMsg'); m.textContent = '✨ Working it out…'; aiGo.disabled = true;
+      try {
+        const x = await A.parseEntry(S, txt); if (!x) throw new Error('Claude could not understand that.');
+        if (['expense', 'income', 'transfer'].includes(x.type) && x.type !== t.type) { t.type = x.type; applyType(); }
+        if (+x.amount > 0) f.amount.value = (+x.amount).toFixed(2);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(x.date || '')) { f.date.value = x.date; futureHint(); }
+        if (x.accountId && M.get(S, 'accounts', x.accountId)) f.accountId.value = x.accountId;
+        if (x.toAccountId && f.toAccountId && M.get(S, 'accounts', x.toAccountId)) f.toAccountId.value = x.toAccountId;
+        if (x.categoryId && M.get(S, 'categories', x.categoryId)) { t.categoryId = x.categoryId; f.categoryId.value = x.categoryId; catTouched = true; }
+        if (x.note) f.note.value = x.note;
+        if (t.type === 'expense' && x.splits?.length > 1) { splits = x.splits.filter(y => M.get(S, 'categories', y.categoryId)).map(y => ({ categoryId: y.categoryId, amount: M.round2(+y.amount) })); splitOn = true; renderSplit(); applyType(); }
+        m.textContent = '✨ Filled in — check it and tap Save.';
+      } catch (e) { m.textContent = e.message; }
+      aiGo.disabled = false;
+    };
+    aiGo.onclick = run; body.querySelector('#aiText').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); run(); } };
   }
   body.querySelector('#hstBtn').onclick = () => { const r = (S.settings.hstRate ?? 13) / 100, a = parseFloat(f.amount.value); if (a > 0) f.hst.value = (a * r / (1 + r)).toFixed(2); };
   function futureHint() { body.querySelector('#futureHint').textContent = f.date.value > today() ? '⏰ Future date — this will show as scheduled and won’t affect balances until then.' : ''; }
@@ -584,8 +610,19 @@ function editTxn(t, preset = {}) {
     const file = e.target.files[0]; if (!file) return;
     const isPdf = /pdf$/i.test(file.type) || /\.pdf$/i.test(file.name);
     try {
-      const text = await receiptText(file);
-      const r = R.parseReceipt(text);
+      // With an API key, Claude reads the receipt (much better on any store's layout); the built-in reader is the fallback.
+      let text = '', r = null, pi = null;
+      if (A.enabled() && L.aiReceipts !== false) {
+        try {
+          msg('✨ Reading the receipt with Claude…');
+          const ai = await A.readReceipt(S, isPdf ? { text: await receiptText(file) } : { file });
+          r = { total: +ai.total || 0, date: /^\d{4}-\d{2}-\d{2}$/.test(ai.date || '') ? ai.date : '', merchant: ai.store || '', last4: ai.card_last4 || '' };
+          pi = { items: ai.items, tax: M.round2(+ai.tax || 0), subtotal: ai.subtotal != null ? M.round2(+ai.subtotal) : null, total: r.total };
+          R.reconcileDiscounts(pi.items, pi.subtotal);
+          text = [r.merchant, ...ai.items.map(i => `${i.desc} ${(+i.amount).toFixed(2)}`)].join('\n');
+        } catch (e) { msg('Claude couldn’t read it (' + e.message + ') — using the built-in reader…'); r = pi = null; }
+      }
+      if (!r) { text = await receiptText(file); r = R.parseReceipt(text); }
       if (r.total) f.amount.value = r.total.toFixed(2);
       if (r.date) f.date.value = r.date;
       if (r.merchant) f.note.value = r.merchant;
@@ -594,9 +631,10 @@ function editTxn(t, preset = {}) {
       if (sg.categoryId) { f.categoryId.value = sg.categoryId; t.categoryId = sg.categoryId; catTouched = true; }
       f.desc.value = text.split('\n').filter(Boolean).slice(0, 12).join('\n');
       futureHint();
-      const pi = R.parseItems(text);
+      const aiRead = !!pi;
+      if (!pi) pi = R.parseItems(text);
       // Some prices unreadable? Read the photo once more at higher resolution and take the prices it finds.
-      if (!N.isNative && !isPdf && pi.items.some(i => i.noPrice || i.guessed)) {
+      if (!aiRead && !N.isNative && !isPdf && pi.items.some(i => i.noPrice || i.guessed)) {
         msg('Some prices were hard to read — taking a closer look…');
         try { R.fillMissing(pi, R.parseItems(await R.ocr(file, p => msg(`Taking a closer look… ${Math.round(p * 100)}%`), true))); } catch {}
         const np = pi.items.filter(i => i.noPrice);
@@ -607,7 +645,7 @@ function editTxn(t, preset = {}) {
       itemTax = pi.tax || 0;
       if (pi.items.length >= 2) {
         // Anything the app can't place gets the store's usual category, so you only fix the exceptions.
-        const cls = pi.items.map(i => ({ ...i, ...R.classifyItem(S, i.desc) }));
+        const cls = pi.items.map(i => (i.categoryId ? { ...i, group: /grocer/i.test(M.get(S, 'categories', M.get(S, 'categories', i.categoryId)?.parentId || i.categoryId)?.name || '') ? 'groceries' : '' } : { ...i, ...R.classifyItem(S, i.desc) }));
         const groc = cls.filter(c => c.group === 'groceries' && c.categoryId), mostlyGroc = groc.length * 2 >= cls.filter(c => c.categoryId).length && groc.length >= 2;
         const grocTop = mostlyGroc && (() => { const c = M.get(S, 'categories', groc[0].categoryId); return c?.parentId || c?.id; })();
         const storeCat = grocTop || sg.categoryId || (catTouched && f.categoryId.value) || '';
@@ -618,7 +656,7 @@ function editTxn(t, preset = {}) {
       }
       const found = [r.total ? 'total' : null, r.date ? 'date' : null, r.merchant ? 'store' : null].filter(Boolean).join(', ') || 'nothing clear';
       body.querySelector('#scanMsg').className = 'hint ok';
-      if (items && splitOn) msg(`Read ${found} and ${items.length} items in ${new Set(items.map(i => i.categoryId).filter(Boolean)).size} categories — check the split below.`); else
+      if (items && splitOn) msg(`${aiRead ? '✨ ' : ''}Read ${found} and ${items.length} items in ${new Set(items.map(i => i.categoryId).filter(Boolean)).size} categories — check the split below.`); else
       msg(sg.rule ? `Read ${found}. Recognised “${sg.rule.merchant}” (learned from ${sg.rule.hits} receipt${sg.rule.hits > 1 ? 's' : ''}) — check and save.`
         : `Read ${found}. New store — pick the account & category once and I’ll remember them.`);
     } catch (err) { msg('Could not read receipt: ' + err.message); }
@@ -1644,6 +1682,50 @@ function taxReports(which = L.reportWhich || 'rental', year = L.reportYear || +t
     You can always override a single transaction in its editor. Add the HST amount on business sales and purchases to get an HST summary.</div>`);
 }
 
+// ---------- AI assistant ----------
+function aiScreen() {
+  const u = L.aiUsage?.month === new Date().toISOString().slice(0, 7) ? L.aiUsage : null;
+  const body = openSheet('AI assistant (Claude)', `
+    <div class="hint">Optional. With your own Claude API key, MoneyBook can read any receipt, fill in a transaction from a sentence, and answer questions about your money. Requests go straight from this device to Anthropic — the key is stored only on this device and is never synced.</div>
+    <form id="f">
+      <label>Claude API key<input name="key" type="password" autocomplete="off" placeholder="sk-ant-…" value="${esc(L.aiKey || '')}"></label>
+      <label class="row" style="align-items:center;gap:8px"><input type="checkbox" name="rec" ${L.aiReceipts !== false ? 'checked' : ''} style="width:auto;margin:0"> Use Claude to read receipts (falls back to the built-in reader)</label>
+      <div class="row"><button class="primary">${L.aiKey ? 'Save' : 'Test & save key'}</button>${L.aiKey ? '<button type="button" class="secondary" id="rm">Remove key</button>' : ''}</div>
+    </form>
+    <div class="pad hint">Model: Claude Haiku 5.5 · about $0.0005 per receipt or question.<br>This month: ${u ? `${u.calls} requests · ${(u.in / 1000).toFixed(1)}k in / ${(u.out / 1000).toFixed(1)}k out tokens · <b>≈ $${u.cost.toFixed(3)} USD</b>` : 'no use yet'}.<br>
+    Get a key at <b>console.anthropic.com</b> › API keys. Set a monthly spend limit there so costs can never run away.</div>`);
+  body.querySelector('#f').onsubmit = async e => {
+    e.preventDefault();
+    const key = e.target.elements.key.value.trim();
+    L.aiReceipts = e.target.elements.rec.checked;
+    if (key && key !== L.aiKey) {
+      toast('Checking the key…');
+      try { await A.testKey(key); } catch (err) { saveLocal(); return toast(err.message, 6000); }
+    }
+    L.aiKey = key || undefined; saveLocal(); closeSheet(); render(); toast(key ? '✨ AI assistant is on' : 'Saved');
+  };
+  body.querySelector('#rm')?.addEventListener('click', () => { if (confirm('Remove the Claude API key from this device?')) { delete L.aiKey; saveLocal(); closeSheet(); render(); toast('AI assistant off'); } });
+}
+let askHistory = [];
+function askScreen() {
+  if (!A.enabled()) return aiScreen();
+  const body = openSheet('Ask MoneyBook', `
+    <div id="chat" style="display:flex;flex-direction:column;gap:8px;padding:4px 0 8px">${askHistory.length ? '' : `<div class="hint">Ask about your spending, income, cards, budgets or upcoming payments. Answers are worked out from your own data.<br><br>Try:<br>• How much did I spend eating out this year vs last year?<br>• What are my biggest expense categories this month?<br>• Which card payments are due this week?<br>• What did I spend at Costco in the last 3 months?</div>`}</div>
+    <form id="f" class="sticky-bar" style="display:flex;gap:6px"><input name="q" placeholder="Ask a question…" autocomplete="off" style="margin:0;flex:1"><button class="primary" style="margin:0;padding:0 16px">Ask</button></form>`);
+  const chat = body.querySelector('#chat');
+  const bubble = (text, me) => { const d = document.createElement('div'); d.style.cssText = `align-self:${me ? 'flex-end' : 'flex-start'};max-width:88%;padding:10px 12px;border-radius:14px;white-space:pre-wrap;line-height:1.45;${me ? 'background:var(--accent);color:#fff' : 'background:var(--card);border:1px solid var(--line)'}`; d.textContent = text; chat.appendChild(d); d.scrollIntoView({ block: 'end' }); return d; };
+  for (const m of askHistory) if (typeof m.content === 'string') bubble(m.content, m.role === 'user');
+  body.querySelector('#f').onsubmit = async e => {
+    e.preventDefault(); const q = e.target.elements.q.value.trim(); if (!q) return;
+    e.target.elements.q.value = ''; bubble(q, true); const wait = bubble('✨ Looking through your data…', false);
+    try {
+      const { answer } = await A.ask(S, q, askHistory.slice(-8));
+      wait.textContent = answer || '(no answer)';
+      askHistory.push({ role: 'user', content: q }, { role: 'assistant', content: answer || '' });
+    } catch (err) { wait.textContent = err.message; }
+  };
+}
+
 // ---------- budgets ----------
 function budgetsScreen() {
   const [from, to] = monthRange();
@@ -2061,7 +2143,7 @@ const actions = {
   editGroup: () => editGroup(),
   openMortgage: el => mortgageDetail(M.get(S, 'mortgages', el.dataset.id)),
   mortgages: listMortgages, recurring: listRecurring, categories: () => listCategories(), manageAccounts,
-  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forceUpdate, forecast: forecastScreen, budgets: budgetsScreen, taxReports: () => taxReports(), lockSettings, backupsScreen,
+  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forceUpdate, aiScreen, askScreen, forecast: forecastScreen, budgets: budgetsScreen, taxReports: () => taxReports(), lockSettings, backupsScreen,
   payCard: el => { const id = el.dataset.id; editTxn(null, { type: 'transfer', amount: +el.dataset.amt || '', accountId: I.usualPayer(S, id) || defaultAccount(), toAccountId: id, note: 'Card payment' }); },
   addBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) editTxn(null, { ...r.template, date: el.dataset.date <= today() ? el.dataset.date : today() }); },
   skipBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) { r.dismissed = [...(r.dismissed || []), el.dataset.date].slice(-12); M.put(S, 'recurring', r); commit(); toast('Skipped this time'); } },
