@@ -288,7 +288,7 @@ function viewTrans() {
   const dates = Object.keys(byDay).sort().reverse();
   const later = dates.filter(d => d > t0), upto = dates.filter(d => d <= t0);
   let h = seg + monthNav() + `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
-  h += catPackBanner() + attentionHtml();
+  h += welcomeBanner() + catPackBanner() + attentionHtml();
   if (soon.length) h += `<div class="banner">⏰ <b>${soon.length} upcoming</b> in the next ${days} days — ${fmt(soonTotal)}. Not deducted from balances until the due date.</div>`;
   if (!dates.length) h += '<div class="empty">No transactions this month.<br>Tap + to add one.</div>';
   if (later.length && upto.length) {
@@ -383,7 +383,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.12-e';
+const APP_VERSION = '2026.11.13-a';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1558,6 +1558,13 @@ function applySetup(data) {
 
 // ---------- needs attention: card payments, bills to add, suggestions ----------
 // Existing users: offer the expanded category set once (nothing is added without their OK).
+// New device / new browser: offer to bring the data back with one Google sign-in.
+function welcomeBanner() {
+  if (L.clientId || L.welcomeDone || M.live(S, 'transactions').length) return '';
+  return `<div class="banner" style="display:block;padding:14px 16px"><b>👋 Welcome to MoneyBook</b><br>
+    <span class="sub2">Already use MoneyBook on another device? Sign in with the same Google account and your data comes back.</span>
+    <div class="btnrow" style="padding:10px 0 0"><button class="primary" data-act="welcomeSignIn">Sign in with Google</button><button class="secondary" data-act="welcomeFresh">Start fresh</button></div></div>`;
+}
 function catPackBanner() {
   if ((S.settings.catPack || 0) >= 3 || !M.live(S, 'transactions').length) return '';
   return `<div class="banner" style="display:flex;gap:8px;align-items:center"><span style="flex:1">🗂️ <b>New categories available</b> — subscriptions, medicines, dry fruits, kids' clothes, car maintenance and more. Pick the ones you want.</span><button class="secondary" data-act="catPackReview" style="padding:6px 12px">Review</button><button class="secondary" data-act="catPackDismiss" style="padding:6px 10px" aria-label="Dismiss">✕</button></div>`;
@@ -2129,6 +2136,8 @@ const actions = {
   editGroup: () => editGroup(),
   openMortgage: el => mortgageDetail(M.get(S, 'mortgages', el.dataset.id)),
   mortgages: listMortgages, recurring: listRecurring, categories: () => listCategories(), manageAccounts,
+  welcomeSignIn: async () => { L.clientId = DEFAULT_CLIENT_ID; saveLocal(); await doSync(true).catch(() => {}); if (L.lastSync) L.welcomeDone = true; else delete L.clientId; saveLocal(); render(); },
+  welcomeFresh: () => { L.welcomeDone = true; saveLocal(); render(); },
   catPackReview: () => { catPackDone(); suggestedCategories('expense'); }, catPackDismiss: () => { catPackDone(); render(); },
   receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forceUpdate, aiScreen, askScreen, forecast: forecastScreen, budgets: budgetsScreen, taxReports: () => taxReports(), lockSettings, backupsScreen,
   payCard: el => { const id = el.dataset.id; editTxn(null, { type: 'transfer', amount: +el.dataset.amt || '', accountId: I.usualPayer(S, id) || defaultAccount(), toAccountId: id, note: 'Card payment' }); },
