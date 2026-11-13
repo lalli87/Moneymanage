@@ -134,8 +134,11 @@ export function learn(s, merchant, accountId, categoryId) {
 export const ITEM_HINTS = [
   ['clothing', /\b(shirt|tee|t-?shirt|jeans|pant|pants|short|shorts|sock|socks|dress|skirt|jacket|coat|hoodie|sweater|legging|bra|underwear|brief|boxer|pajama|pyjama|shoe|shoes|boot|boots|sandal|slipper|hat|cap|glove|mitt|scarf|apparel|girls|boys|mens|womens|ladies|kids? ?wear|george|athletic works|no boundaries)(?:e?s)?\b/i],
   ['school', /\b(notebook|note ?book|binder|pencil|pen|pens|crayon|marker|highlighter|eraser|glue|scissor|ruler|folder|paper pad|loose leaf|backpack|lunch ?box|stationery|sharpener|index card|sticky note|post-?it)(?:e?s)?\b/i],
-  ['household', /\b(detergent|bleach|cleaner|lysol|clorox|dish ?soap|dawn|sponge|paper towel|bounty|toilet paper|bathroom tissue|bath tissue|facial tissue|tissue|kleenex|royale|scotties|charmin|cottonelle|napkin|garbage bag|trash bag|hefty|glad|foil|plastic wrap|ziploc|storage bag|light ?bulb|battery|batteries|duracell|energizer|laundry|tide|gain|downy|fabric|swiffer|mop|broom|candle|air freshener|container|organizer|hanger|vacuum|filter|kitchen|utensil|mug|plate|bowl|cup|towel|sheet|pillow)(?:e?s)?\b|towel/i],
+  ['laundry', /\b(laundry|detergent|tide|gain|downy|softener|fabric softener|dryer sheet|oxiclean|persil|bounce|snuggle)(?:e?s)?\b/i],
+  ['paper', /\b(paper towel|bounty|toilet paper|bathroom tissue|bath tissue|facial tissue|tissue|kleenex|royale|scotties|charmin|cottonelle|napkin)(?:e?s)?\b/i],
+  ['household', /\b(bleach|cleaner|lysol|clorox|dish ?soap|dawn|sponge|garbage bag|trash bag|hefty|glad|foil|plastic wrap|ziploc|storage bag|light ?bulb|battery|batteries|duracell|energizer|fabric|swiffer|mop|broom|candle|air freshener|container|organizer|hanger|vacuum|filter|kitchen|utensil|mug|plate|bowl|cup|towel|sheet|pillow|floor cleaner|mop|swiffer|windex|vim|mr\.? clean|wipes)(?:e?s)?\b|towel/i],
   ['personal', /\b(shampoo|conditioner|body ?wash|soap bar|toothpaste|toothbrush|floss|mouthwash|deodorant|razor|shave|lotion|sunscreen|cosmetic|makeup|lipstick|lip ?balm|chapstick|blistex|eos|carmex|burt'?s bees|nail|hair|tampon|pad|diaper|wipes|cotton|q-?tip|colgate|crest|dove|gillette|nivea|vaseline)(?:e?s)?\b/i],
+  ['vitamins', /\b(vitamin|multivitamin|supplement|omega|fish oil|protein powder|probiotic|melatonin)(?:e?s)?\b/i],
   ['health', /\b(vitamin|tylenol|advil|motrin|aspirin|allergy|reactine|claritin|cough|cold|medicine|ricola|halls|lozenge|lozenges|throat|strepsils|vicks|buckley|neocitran|pharmacy|rx|bandage|band-?aid|thermometer|supplement|probiotic|omega)(?:e?s)?\b/i],
   ['kids', /\b(toy|toys|lego|barbie|hot wheels|puzzle|game|doll|plush|crayola|play-?doh|nerf|stroller|baby|infant|toddler)(?:e?s)?\b/i],
   ['electronics', /\b(charger|cable|usb|hdmi|headphone|earbud|earphone|phone case|screen protector|adapter|electronic|speaker|mouse|keyboard|memory card|sd card|flash drive|ink|toner|printer)(?:e?s)?\b/i],
@@ -147,10 +150,13 @@ export const ITEM_HINTS = [
 ];
 // Maps a hint group to one of your categories by name (first that exists).
 export const HINT_CATEGORIES = {
-  groceries: ['groceries', 'grocery', 'food'], clothing: ['clothing', 'apparel', 'clothes'], school: ['school supplies', 'books & supplies', 'stationery', 'education'],
-  household: ['household supplies', 'household', 'home'], personal: ['personal care', 'toiletries', 'beauty'], health: ['pharmacy', 'health', 'medical'],
-  kids: ['toys', 'kids', 'children'], electronics: ['electronics', 'tech', 'gadgets'], pets: ['pets', 'pet'], auto: ['car maintenance', 'maintenance & tires', 'car', 'transport'],
-  garden: ['garden', 'home'], gift: ['gifts', 'gift'],
+  groceries: ['groceries', 'grocery', 'food'], clothing: ['clothing & shoes', 'clothing', 'apparel', 'clothes'], school: ['school supplies', 'books & supplies', 'stationery', 'education'],
+  laundry: ['laundry', 'household supplies', 'household', 'home'], paper: ['paper products', 'household supplies', 'household', 'home'],
+  household: ['cleaning supplies', 'cleaning', 'household supplies', 'household', 'home'], personal: ['toiletries', 'personal care', 'beauty'],
+  vitamins: ['vitamins & supplements', 'medicines (over the counter)', 'pharmacy', 'health & medical', 'health', 'medical'],
+  health: ['medicines (over the counter)', 'pharmacy', 'health & medical', 'health', 'medical'],
+  kids: ['toys & games', 'toys', 'kids & baby', 'kids', 'children'], electronics: ['electronics', 'tech & electronics', 'tech', 'gadgets'], pets: ['pets', 'pet'],
+  auto: ['car accessories', 'maintenance & tires', 'car maintenance', 'car', 'transport'], garden: ['garden & lawn', 'garden', 'home'], gift: ['gifts', 'gifts & donations', 'gift'],
 };
 // Store address and loyalty/promotion lines are never items.
 const ADDRESS = /\b[A-Z]\d[A-Z]\s?\d[A-Z]\d?\b|\b(street|st\.?|avenue|ave|road|rd|blvd|boulevard|drive|dr|highway|hwy|suite|unit)\b.*,|,\s*(on|ontario|bc|ab|qc|mb|sk|ns|nb)\b/i;
@@ -273,7 +279,10 @@ export function classifyItem(s, desc) {
   // 2) built-in hints mapped onto your categories (non-food first, then the grocery dictionary)
   const cats = live(s, 'categories').filter(c => c.type === 'expense');
   for (const [group, re] of ITEM_HINTS) if (group !== 'groceries' && re.test(' ' + desc + ' ')) {
-    for (const name of HINT_CATEGORIES[group] || [group]) {
+    const extra = group === 'clothing' ? [/\b(kids?|boys?|girls?|toddler|youth|junior|jr)\b/i.test(desc) && "kids' clothing", /\b(baby|infant)\b/i.test(desc) && 'baby clothing',
+      /\b(shoes?|boots?|sandals?|sneakers?|slippers?)\b/i.test(desc) && 'shoes', /\b(jacket|coat|gloves?|mitts?|toque|scarf|snow ?pants)\b/i.test(desc) && 'winter wear'].filter(Boolean)
+      : group === 'personal' && /\b(lip ?balm|chapstick|cosmetic|makeup|lipstick|cream|lotion|serum|sunscreen)\b/i.test(desc) ? ['skincare & cosmetics'] : [];
+    for (const name of [...extra, ...(HINT_CATEGORIES[group] || [group])]) {
       const c = cats.find(c => c.name.toLowerCase() === name) || cats.find(c => c.name.toLowerCase().includes(name));
       if (c) return { categoryId: c.id, how: 'hint', group };
     }

@@ -288,7 +288,7 @@ function viewTrans() {
   const dates = Object.keys(byDay).sort().reverse();
   const later = dates.filter(d => d > t0), upto = dates.filter(d => d <= t0);
   let h = seg + monthNav() + `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
-  h += attentionHtml();
+  h += catPackBanner() + attentionHtml();
   if (soon.length) h += `<div class="banner">⏰ <b>${soon.length} upcoming</b> in the next ${days} days — ${fmt(soonTotal)}. Not deducted from balances until the due date.</div>`;
   if (!dates.length) h += '<div class="empty">No transactions this month.<br>Tap + to add one.</div>';
   if (later.length && upto.length) {
@@ -383,7 +383,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.12-d';
+const APP_VERSION = '2026.11.12-e';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1557,6 +1557,12 @@ function applySetup(data) {
 }
 
 // ---------- needs attention: card payments, bills to add, suggestions ----------
+// Existing users: offer the expanded category set once (nothing is added without their OK).
+function catPackBanner() {
+  if ((S.settings.catPack || 0) >= 3 || !M.live(S, 'transactions').length) return '';
+  return `<div class="banner" style="display:flex;gap:8px;align-items:center"><span style="flex:1">🗂️ <b>New categories available</b> — subscriptions, medicines, dry fruits, kids' clothes, car maintenance and more. Pick the ones you want.</span><button class="secondary" data-act="catPackReview" style="padding:6px 12px">Review</button><button class="secondary" data-act="catPackDismiss" style="padding:6px 10px" aria-label="Dismiss">✕</button></div>`;
+}
+const catPackDone = () => { S.settings = { ...S.settings, catPack: 3, updatedAt: Date.now() }; commit(); };
 function attentionHtml() {
   const rd = S.settings.remindDays ?? 3;
   const cards = X.cardStatuses(S).filter(c => c.status === 'due' || c.status === 'overdue');
@@ -1981,9 +1987,11 @@ function accountDetail(id, view = L.accView || 'daily', anchor) {
 // ---------- suggested categories (adds only what you don't already have) ----------
 const CATEGORY_PACK = M.CATEGORY_PACK;
 // Names you may already use for the same thing — subcategories go under yours instead of a near-duplicate.
-const CATEGORY_SYNONYMS = { 'dining out': ['food', 'restaurants', 'eating out'], 'household supplies': ['household'], clothing: ['apparel', 'clothes'], car: ['transport', 'transportation', 'vehicle', 'auto'],
-  entertainment: ['culture', 'fun'], 'fees & interest': ['fees & taxes', 'fees', 'bank charges'], 'gifts & donations': ['gifts'], 'canada child benefit': ['child care benefit', 'ccb', 'child benefit'],
-  'interest & dividends': ['interest earned', 'interest'], 'other income': ['other'], health: ['medical'], 'tech & subscriptions': ['subscriptions'], 'rental unit': ['rental expenses'] };
+const CATEGORY_SYNONYMS = { 'dining out': ['food', 'restaurants', 'eating out'], 'household supplies': ['household'], 'clothing & shoes': ['apparel', 'clothes', 'clothing'],
+  car: ['transport', 'transportation', 'vehicle', 'auto'], entertainment: ['fun'], 'fees & interest': ['fees & taxes', 'taxes and fees', 'fees', 'bank charges'],
+  'gifts & donations': ['gifts', 'culture'], 'investment income': ['interest earned', 'interest & dividends', 'interest'], 'other income': ['other'],
+  'health & medical': ['health', 'medical'], 'tech & electronics': ['digital purchase', 'electronics'], 'transit & rides': ['rides & transit'], 'kids & baby': ['kids'],
+  'rental property': ['rental unit', 'rental expenses'], business: ['business expenses'], 'refunds & reimbursements': ['refunds'], 'side income': ['freelance'] };
 const nn = x => String(x || '').toLowerCase().replace(/[^a-z0-9&]+/g, ' ').trim();
 function suggestedCategories(type = 'expense') {
   const mine = M.live(S, 'categories').filter(c => c.type === type);
@@ -1999,7 +2007,9 @@ function suggestedCategories(type = 'expense') {
     <div class="list">${plan.map((p, i) => `<label class="li check" style="display:flex;align-items:flex-start;gap:10px;margin:0"><input type="checkbox" data-i="${i}" checked style="margin-top:3px">
       <div class="grow">${p.top ? `${esc((p.top.emoji || '') + ' ' + p.top.name)} <span class="pill">yours</span>` : `${p.emoji} ${esc(p.name)}`}${p.tag && !p.top ? ` <span class="pill">${p.tag}</span>` : ''}
       <small>${p.subs.length ? '+ ' + p.subs.map(esc).join(', ') : 'new category'}</small></div></label>`).join('') || '<div class="empty">You already have all of them 👍</div>'}</div>
+    ${type === 'expense' ? '<div class="pad"><button type="button" class="secondary" id="toInc" style="width:100%">See income categories ›</button></div>' : ''}
     ${plan.length ? '<div class="sticky-bar"><button class="primary" id="go" style="width:100%">Add selected</button></div>' : ''}`);
+  body.querySelector('#toInc')?.addEventListener('click', () => suggestedCategories('income'));
   body.querySelector('#go')?.addEventListener('click', () => {
     let n = 0;
     body.querySelectorAll('input[data-i]:checked').forEach(cb => {
@@ -2119,6 +2129,7 @@ const actions = {
   editGroup: () => editGroup(),
   openMortgage: el => mortgageDetail(M.get(S, 'mortgages', el.dataset.id)),
   mortgages: listMortgages, recurring: listRecurring, categories: () => listCategories(), manageAccounts,
+  catPackReview: () => { catPackDone(); suggestedCategories('expense'); }, catPackDismiss: () => { catPackDone(); render(); },
   receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forceUpdate, aiScreen, askScreen, forecast: forecastScreen, budgets: budgetsScreen, taxReports: () => taxReports(), lockSettings, backupsScreen,
   payCard: el => { const id = el.dataset.id; editTxn(null, { type: 'transfer', amount: +el.dataset.amt || '', accountId: I.usualPayer(S, id) || defaultAccount(), toAccountId: id, note: 'Card payment' }); },
   addBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) editTxn(null, { ...r.template, date: el.dataset.date <= today() ? el.dataset.date : today() }); },

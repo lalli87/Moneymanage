@@ -1,6 +1,10 @@
 // Built-in grocery vocabulary for reading receipt lines, grouped by store section.
 // Matching tolerates receipt abbreviations and camera misreads (e.g. "POJATPES" → potatoes, "MLJK" → milk).
 const SECTIONS = {
+  nuts: `almond almonds cashew cashews kaju badam raisin raisins kishmish pistachio pistachios walnut walnuts akhrot dates khajur medjool fig figs anjeer
+    apricot dried makhana peanut peanuts pecan pecans hazelnut hazelnuts prunes`,
+  spices: `spice spices masala turmeric haldi cumin jeera garam chilli paprika cinnamon dalchini oregano cardamom elaichi clove cloves laung
+    hing asafoetida ajwain kasuri mustard rai fennel saunf mdh everest`,
   fruit: `apple apples ambrosia gala fuji honeycrisp mcintosh granny banana bananas plantain pear pears bosc anjou bartlett orange oranges navel
     mandarin mandarins clementine clementines tangerine grapefruit lemon lemons lime limes grape grapes berry berries strawberry strawberries
     blueberry blueberries raspberry raspberries blackberry blackberries cranberry cherry cherries peach peaches nectarine plum plums apricot kiwi kiwis
@@ -37,8 +41,9 @@ const FOOD_PREFIXES = /\b(ks|kirkland|gv|great value|pc|president'?s choice|no n
 
 const SECTION_NAMES = {
   fruit: ['fruits', 'fruit', 'produce', 'fruits & vegetables'], produce: ['vegetables', 'veggies', 'vegetable', 'produce', 'fruits & vegetables'], dairy: ['dairy & eggs', 'dairy'], meat: ['meat & fish', 'meat', 'seafood'],
-  bakery: ['bakery', 'bread'], pantry: ['pantry', 'staples'], snacks: ['snacks & drinks', 'snacks'], drinks: ['snacks & drinks', 'drinks', 'beverages'],
-  frozen: ['frozen'], indian: ['indian groceries', 'indian'],
+  bakery: ['bakery & bread', 'bakery', 'bread'], pantry: ['grains, flour & lentils', 'canned & packaged', 'pantry', 'staples'], snacks: ['snacks & sweets', 'snacks & drinks', 'snacks'], drinks: ['drinks & juices', 'snacks & drinks', 'drinks', 'beverages'],
+  frozen: ['frozen food', 'frozen'], indian: ['indian & ethnic groceries', 'indian groceries', 'indian'],
+  nuts: ['dry fruits & nuts', 'dry fruits', 'nuts'], spices: ['spices & masalas', 'spices', 'indian & ethnic groceries', 'indian groceries'],
 };
 
 const DICT = new Map();
