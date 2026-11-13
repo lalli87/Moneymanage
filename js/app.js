@@ -383,7 +383,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.12-c';
+const APP_VERSION = '2026.11.12-d';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1979,34 +1979,7 @@ function accountDetail(id, view = L.accView || 'daily', anchor) {
 }
 
 // ---------- suggested categories (adds only what you don't already have) ----------
-const CATEGORY_PACK = {
-  expense: [
-    ['🛒', 'Groceries', ['Produce', 'Meat & fish', 'Dairy & eggs', 'Bakery', 'Snacks & drinks', 'Indian groceries']],
-    ['🍽️', 'Dining out', ['Restaurants', 'Coffee & tea', 'Fast food', 'Food delivery']],
-    ['🏠', 'Home', ['Property tax', 'Home insurance', 'Maintenance & repairs', 'Furniture & décor', 'Appliances', 'Garden']],
-    ['🔌', 'Utilities', ['Hydro', 'Water & gas', 'Internet', 'Mobile phone']],
-    ['🧴', 'Household supplies', ['Cleaning', 'Paper & kitchen', 'Laundry', 'Dollar store']],
-    ['👕', 'Clothing', ['Adults', 'Kids', 'Shoes']],
-    ['💊', 'Health', ['Pharmacy', 'Dental', 'Vision', 'Fitness']],
-    ['💅', 'Personal care', ['Haircut & salon', 'Toiletries']],
-    ['🚗', 'Car', ['EV charging', 'Car insurance', 'Maintenance & tires', 'Parking & tolls', 'Licence & registration']],
-    ['🚕', 'Rides & transit', ['Uber & taxi', 'Transit']],
-    ['👶', 'Kids', ['Childcare', 'Activities & classes', 'School supplies', 'Toys']],
-    ['📚', 'Education', ['Tuition', 'Books & supplies', 'Courses & certifications']],
-    ['💻', 'Tech & subscriptions', ['Software & apps', 'Streaming', 'Cloud storage', 'Electronics']],
-    ['🎁', 'Gifts & donations', ['Gifts', 'Donations']],
-    ['✈️', 'Travel', ['Flights', 'Hotels', 'Travel spending']],
-    ['🎉', 'Entertainment', ['Events & outings', 'Hobbies', 'Games']],
-    ['🐾', 'Pets', []],
-    ['🏘️', 'Rental unit', ['Repairs & maintenance', 'Supplies', 'Advertising', 'Legal & fees'], 'rental'],
-    ['💼', 'Business expenses', ['Office supplies', 'Software', 'Professional fees', 'Bank fees'], 'business'],
-    ['🧾', 'Fees & interest', ['Bank fees', 'Card interest', 'Government fees', 'Income tax']],
-  ],
-  income: [
-    ['💰', 'Salary', []], ['🏘️', 'Rental income', [], 'rental'], ['💼', 'Business income', [], 'business'], ['👶', 'Canada Child Benefit', []],
-    ['📈', 'Interest & dividends', []], ['💸', 'Cashback & rewards', []], ['🎁', 'Gifts received', []], ['↩️', 'Refunds', []], ['➕', 'Other income', []],
-  ],
-};
+const CATEGORY_PACK = M.CATEGORY_PACK;
 // Names you may already use for the same thing — subcategories go under yours instead of a near-duplicate.
 const CATEGORY_SYNONYMS = { 'dining out': ['food', 'restaurants', 'eating out'], 'household supplies': ['household'], clothing: ['apparel', 'clothes'], car: ['transport', 'transportation', 'vehicle', 'auto'],
   entertainment: ['culture', 'fun'], 'fees & interest': ['fees & taxes', 'fees', 'bank charges'], 'gifts & donations': ['gifts'], 'canada child benefit': ['child care benefit', 'ccb', 'child benefit'],

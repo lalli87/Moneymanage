@@ -1,5 +1,5 @@
 // Google sign-in (browser token flow), Drive appDataFolder sync, Calendar reminders.
-import { merge, get, occurrences, todayStr, addDays } from './model.js';
+import { merge, get, occurrences, todayStr, addDays, dropUnusedSeeds } from './model.js';
 import * as N from './native.js';
 
 const SCOPES = 'https://www.googleapis.com/auth/drive.appdata https://www.googleapis.com/auth/calendar.events';
@@ -87,7 +87,8 @@ export async function sync(state, clientId, interactive, codec = PLAIN) {
   let merged = state;
   if (f) {
     const remote = await (await api(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`)).json();
-    merged = merge(state, await codec.decode(remote));
+    const rem = await codec.decode(remote);
+    merged = merge(dropUnusedSeeds(state, rem), rem);
   }
   await upload(f?.id, await codec.encode(merged));
   return merged;

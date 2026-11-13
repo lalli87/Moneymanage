@@ -22,6 +22,40 @@ export function addMonths(s, n, anchorDay) {
 const endOfMonth = s => { const d = parseYmd(s); return ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0)); };
 
 // ---------- state ----------
+// The starter set every new user gets (and that existing users can add from Categories › Suggested).
+// Everyone can rename, remove, hide or add their own afterwards.
+export const CATEGORY_PACK = {
+  expense: [
+    ['🛒', 'Groceries', ['Produce', 'Meat & fish', 'Dairy & eggs', 'Bakery', 'Snacks & drinks', 'Indian groceries']],
+    ['🍽️', 'Dining out', ['Restaurants', 'Coffee & tea', 'Fast food', 'Food delivery']],
+    ['🏠', 'Home', ['Rent', 'Property tax', 'Home insurance', 'Condo fees', 'Maintenance & repairs', 'Furniture & décor', 'Appliances', 'Garden']],
+    ['🔌', 'Utilities', ['Hydro', 'Water', 'Gas & heating', 'Internet', 'Mobile phone', 'TV']],
+    ['🧴', 'Household supplies', ['Cleaning', 'Paper & kitchen', 'Laundry', 'Dollar store']],
+    ['👕', 'Clothing', ['Adults', 'Kids', 'Shoes']],
+    ['💊', 'Health', ['Pharmacy', 'Doctor & clinic', 'Dental', 'Vision', 'Physio & massage', 'Fitness']],
+    ['💅', 'Personal care', ['Haircut & salon', 'Toiletries']],
+    ['🚗', 'Car', ['Fuel', 'EV charging', 'Car insurance', 'Maintenance & tires', 'Car payment', 'Parking & tolls', 'Licence & registration', 'Car wash']],
+    ['🚕', 'Rides & transit', ['Uber & taxi', 'Transit']],
+    ['👶', 'Kids', ['Childcare', 'Activities & classes', 'School supplies', 'Toys']],
+    ['📚', 'Education', ['Tuition', 'Books & supplies', 'Courses & certifications']],
+    ['💻', 'Tech & subscriptions', ['Software & apps', 'Streaming', 'Cloud storage', 'Electronics']],
+    ['🎁', 'Gifts & donations', ['Gifts', 'Donations']],
+    ['✈️', 'Travel', ['Flights', 'Hotels', 'Travel spending']],
+    ['🎉', 'Entertainment', ['Events & outings', 'Hobbies', 'Games']],
+    ['🐾', 'Pets', ['Pet food', 'Vet', 'Grooming & supplies']],
+    ['🛡️', 'Insurance', ['Life insurance', 'Health & dental plan', 'Other insurance']],
+    ['🏦', 'Savings & investing', ['RRSP', 'TFSA', 'RESP', 'Emergency fund']],
+    ['🏘️', 'Rental unit', ['Repairs & maintenance', 'Supplies', 'Advertising', 'Legal & fees'], 'rental'],
+    ['💼', 'Business expenses', ['Office supplies', 'Software', 'Professional fees', 'Bank fees'], 'business'],
+    ['🧾', 'Fees & interest', ['Bank fees', 'Card interest', 'Loan interest', 'Government fees', 'Income tax']],
+    ['📦', 'Other', []],
+  ],
+  income: [
+    ['💰', 'Salary', ['Paycheque', 'Bonus', 'Overtime']], ['🏘️', 'Rental income', [], 'rental'], ['💼', 'Business income', [], 'business'], ['👶', 'Canada Child Benefit', []],
+    ['🏛️', 'Government benefits', ['GST/HST credit', 'Ontario Trillium Benefit', 'EI', 'Tax refund']], ['📈', 'Interest & dividends', []], ['🧑‍💻', 'Side income', []], ['💸', 'Cashback & rewards', []], ['🎁', 'Gifts received', []], ['↩️', 'Refunds', []], ['➕', 'Other income', []],
+  ],
+};
+
 export function emptyState() {
   const now = Date.now();
   const s = { schema: 1, settings: { currency: 'CAD', remindDays: 3, updatedAt: now } };
@@ -31,20 +65,30 @@ export function emptyState() {
   const g = (name, kind) => { const r = { id: 'def_g_' + slug(name), name, kind, order: s.groups.length, updatedAt: 1 }; s.groups.push(r); return r; };
   const cash = g('Cash', 'asset'); g('Accounts', 'asset'); g('Card', 'card'); g('Loan', 'liability'); g('Investments', 'asset');
   s.accounts.push({ id: 'def_a_cash', groupId: cash.id, name: 'Cash', opening: 0, includeInTotals: true, updatedAt: 1 });
-  const cat = (type, name, emoji = '', parentId = null) => {
-    const r = { id: `def_c_${type}_${parentId ? parentId.replace(/^def_c_\w+?_/, '') + '_' : ''}${slug(name)}`, type, name, emoji, parentId, order: s.categories.length, updatedAt: 1 };
+  const cat = (type, name, emoji = '', parentId = null, tag) => {
+    const r = { id: `def_c_${type}_${parentId ? parentId.replace(/^def_c_\w+?_/, '') + '_' : ''}${slug(name)}`, type, name, emoji, parentId, order: s.categories.length, seed: true, updatedAt: 1, ...(tag ? { defaultTag: tag } : {}) };
     s.categories.push(r); return r;
   };
-  ['🛒 Groceries', '🍜 Food', '🪑 Household', '🚗 Transport', '🔌 Utilities', '🛡️ Insurance', '📙 Education',
-   '🧥 Apparel', '💊 Health', '🖼️ Culture', '🧾 Fees & Taxes', '🎁 Gifts'].forEach(x => {
-    const [e, ...n] = x.split(' '); cat('expense', n.join(' '), e);
-  });
+  for (const type of ['expense', 'income']) for (const [emoji, name, subs, tag] of CATEGORY_PACK[type]) {
+    const top = cat(type, name, emoji, null, tag); subs.forEach(sb => cat(type, sb, '', top.id));
+  }
   const mort = cat('expense', 'Home Mortgage', '🏡');
   cat('expense', 'Interest', '', mort.id); cat('expense', 'Principal', '', mort.id);
-  ['💰 Salary', '🏅 Bonus', '🏘️ Rental Income', '👶 Child care benefit', '📈 Interest earned', '➕ Other'].forEach(x => {
-    const [e, ...n] = x.split(' '); cat('income', n.join(' '), e);
-  });
   return s;
+}
+// A fresh device starts with the starter categories. When it first syncs into an account that already has
+// data, the starters that account never had (and that nobody touched here) are dropped, so they don't get
+// added to an existing setup.
+export function dropUnusedSeeds(local, remote) {
+  if (!remote?.categories?.length) return local;
+  const inRemote = new Set(remote.categories.map(c => c.id));
+  const used = new Set();
+  for (const t of local.transactions || []) { used.add(t.categoryId); (t.splits || []).forEach(x => used.add(x.categoryId)); }
+  for (const r of local.recurring || []) used.add(r.template?.categoryId);
+  for (const r of local.rules || []) used.add(r.categoryId);
+  const keep = c => !(c.seed && c.updatedAt === 1 && !inRemote.has(c.id) && !used.has(c.id));
+  const kept = (local.categories || []).filter(keep), keptIds = new Set(kept.map(c => c.id));
+  return { ...local, categories: kept.filter(c => !c.parentId || keptIds.has(c.parentId) || inRemote.has(c.parentId)) };
 }
 export function migrate(s) {
   COLLECTIONS.forEach(c => { if (!Array.isArray(s[c])) s[c] = []; });
