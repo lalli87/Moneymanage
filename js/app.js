@@ -164,6 +164,8 @@ function scheduleNative() {
     const d = M.addDays(x.date, -Math.min(rd, 1));
     if (d >= t0) list.push({ date: d, title: `⏰ ${x.note || 'Payment'} ${x.date === d ? 'today' : 'tomorrow'}`, body: `${fmt(x.amount)} · ${M.accName(S, x.accountId)}` });
   }
+  for (const t of M.owedList(S)) if (t.owed.remind && t.owed.remind >= t0)
+    list.push({ date: t.owed.remind, title: `👥 ${t.owed.who || 'Someone'} owes you ${fmt(M.owedLeft(S, t))}`, body: `${t.note || 'Purchase'} on ${t.date} — tap Got paid in MoneyBook when they pay` });
   list.sort((a, b) => a.date.localeCompare(b.date));
   N.scheduleReminders(list);
 }
@@ -172,13 +174,14 @@ function notifyUpcoming() {
   const days = S.settings.remindDays ?? 3;
   const due = M.projected(S, today(), M.addDays(today(), days));
   const cards = X.cardStatuses(S).filter(c => c.status === 'overdue' || (c.status === 'due' && c.daysLeft <= days));
-  const bills = X.billReminders(S, today(), days);
-  if ((!due.length && !cards.length && !bills.length) || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const bills = X.billReminders(S, today(), days), owes = owedDue();
+  if ((!due.length && !cards.length && !bills.length && !owes.length) || !('Notification' in window) || Notification.permission !== 'granted') return;
   if (L.lastNotified === today()) return;
   L.lastNotified = today(); saveLocal();
   const lines = [
     ...cards.map(c => `💳 ${c.account.name}: ${fmt(c.remaining)} ${c.status === 'overdue' ? 'OVERDUE' : 'due ' + c.dueDate.slice(5)}`),
     ...bills.map(b => `🔌 Add ${b.recurring.template.note || 'bill'} (~${fmt(b.recurring.template.amount)})`),
+    ...owes.map(t => `👥 ${t.owed.who || 'Someone'} owes you ${fmt(M.owedLeft(S, t))}`),
     ...due.slice(0, 4).map(t => `${t.date.slice(5)} ${t.note || ''} ${fmt(t.amount)}`)];
   navigator.serviceWorker?.ready.then(reg => reg.showNotification(cards.length ? 'Card payment due' : 'Upcoming payments', {
     body: lines.slice(0, 6).join('\n'), icon: 'icons/icon-192.png', tag: 'upcoming'
@@ -219,6 +222,7 @@ function defaultAccount() {
 }
 function txLabel(t) {
   if (t.type === 'transfer') return '↔ Transfer';
+  if (t.type === 'income' && (t.reimburses?.length || t.offsetCategoryId) && !t.categoryId) return '↩️ Money back';
   if (t.type === 'mortgage') return t.prepayment ? '🏡 Prepayment' : '🏡 Mortgage';
   if (t.splits?.length > 1) { const top = [...new Set(t.splits.map(x => { const c = M.get(S, 'categories', x.categoryId); return c?.parentId || c?.id; }))];
     return top.length === 1 ? `${M.catLabel(S, top[0])} · split ${t.splits.length}` : `${M.catLabel(S, t.splits[0].categoryId)} +${t.splits.length - 1}`; }
@@ -236,11 +240,25 @@ function txRow(t, splits = {}) {
   const target = t.projected && t.recurringId && !M.get(S, 'transactions', t.id)
     ? `data-act="editRule" data-id="${t.recurringId}"` : `data-act="editTxn" data-id="${t.id}"`;
   const freq = t.recurringId ? (M.FREQS[M.get(S, 'recurring', t.recurringId)?.freq] || '') : '';
-  return `<div class="tx ${t.projected ? 'proj' : ''}" ${target}>
+  // Refunds: purchases show what they really cost you; money back says what it paid back.
+  let amtHtml = fmt(t.amount), extra = '';
+  if (!t.projected && t.type === 'expense') {
+    const back = M.reimbursedOf(S, t.id), owe = M.owedLeft(S, t);
+    if (back > 0) amtHtml = `${fmt(M.round2(t.amount - back))}<small class="sub2" style="display:block">paid ${fmt(t.amount)}</small>`;
+    if (back > 0) extra += ` <span class="badge back">↩ ${fmt(back)} back</span>`;
+    if (owe > 0) extra += ` <span class="badge owe">👥 ${esc(t.owed.who || 'Owed')} ${fmt(owe)}</span>`;
+  }
+  if (!t.projected && t.type === 'income' && (t.reimburses?.length || t.offsetCategoryId)) {
+    const counted = M.netAmount(S, t);
+    const fors = (t.reimburses || []).map(l => M.get(S, 'transactions', l.id)).filter(Boolean);
+    acc += fors.length ? ` · for ${fors.map(e => `${e.note || txLabel(e)} ${e.date.slice(5)}`).join(', ')}` : t.offsetCategoryId ? ` · lowers ${M.catLabel(S, t.offsetCategoryId)}` : '';
+    amtHtml = `${fmt(t.amount)}<small class="sub2" style="display:block">${counted > 0.004 ? fmt(counted) + ' as income' : 'not income'}</small>`;
+  }
+  return `<div class="tx ${t.projected ? 'proj' : ''}" ${target} data-txid="${t.id}">
     <div class="tx-cat">${esc(txLabel(t))}</div>
     <div class="tx-main"><div>${esc(t.note || '')} ${t.remind ? '<span class="badge">Reminder</span>' : t.projected ? '<span class="badge">Scheduled</span>' : ''}</div>
-    <small>${esc(acc)}${freq ? ' (' + freq + ')' : ''}</small></div>
-    <div class="amt ${cls}">${fmt(t.amount)}</div></div>`;
+    <small>${esc(acc)}${freq ? ' (' + freq + ')' : ''}</small>${extra ? `<p class="tx-badges">${extra}</p>` : ''}</div>
+    <div class="amt ${cls}" style="text-align:right">${amtHtml}</div></div>`;
 }
 
 // ---------- views ----------
@@ -255,7 +273,7 @@ function render() {
 // Transactions: Month view (today first; the rest of the month's scheduled payments folded at the top) or Day view.
 let dayCursor = null;
 const dayGroup = (d, list, splits) => {
-  const dt = M.parseYmd(d), real = list.filter(t => !t.projected), sm = M.sumIE(real);
+  const dt = M.parseYmd(d), real = list.filter(t => !t.projected), sm = M.sumIE(real, S);
   return `<div class="day" id="day-${d}"><div class="dayhead"><span class="d">${dt.getDate()}</span><span class="wd">${WD[dt.getDay()]}</span><small class="sub2">${d.slice(0, 7)}${d === today() ? ' · <b>Today</b>' : ''}</small><span class="sp"></span>
     <span class="amt inc">${sm.inc ? fmt(sm.inc) : ''}</span><span class="amt exp">${sm.exp ? fmt(sm.exp) : ''}</span></div>
     ${list.map(t => txRow(t, splits)).join('')}</div>`;
@@ -268,7 +286,7 @@ function viewTrans() {
     const d = dayCursor || t0, dt = M.parseYmd(d);
     const posted = d <= t0 ? M.live(S, 'transactions').filter(t => t.date === d) : [];
     const list = [...posted, ...M.projected(S, d, d)];
-    const { inc, exp } = M.sumIE(posted);
+    const { inc, exp } = M.sumIE(posted, S);
     let h = seg + `<div class="monthnav"><button data-act="dayNav" data-n="-1" aria-label="Previous day">‹</button><b>${WD[dt.getDay()]} ${MONTHS[dt.getMonth()]} ${dt.getDate()}, ${dt.getFullYear()}</b><button data-act="dayNav" data-n="1" aria-label="Next day">›</button></div>`;
     if (d !== t0) h += `<div style="text-align:center;margin:-4px 0 6px"><button class="secondary" data-act="dayNav" data-n="0" style="padding:6px 14px">Today</button></div>`;
     h += `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
@@ -279,7 +297,7 @@ function viewTrans() {
   const [from, to] = monthRange();
   const posted = M.live(S, 'transactions').filter(t => t.date >= from && t.date <= to && t.date <= t0);
   const proj = M.projected(S, from, to);
-  const { inc, exp } = M.sumIE(posted);
+  const { inc, exp } = M.sumIE(posted, S);
   const days = S.settings.remindDays ?? 3;
   const soon = M.projected(S, t0, M.addDays(t0, days));
   const soonTotal = soon.reduce((a, t) => a + (t.type === 'income' ? 0 : +t.amount), 0);
@@ -288,7 +306,7 @@ function viewTrans() {
   const dates = Object.keys(byDay).sort().reverse();
   const later = dates.filter(d => d > t0), upto = dates.filter(d => d <= t0);
   let h = seg + monthNav() + `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
-  h += welcomeBanner() + catPackBanner() + attentionHtml();
+  h += welcomeBanner() + catPackBanner() + attentionHtml() + owedBanner();
   if (soon.length) h += `<div class="banner">⏰ <b>${soon.length} upcoming</b> in the next ${days} days — ${fmt(soonTotal)}. Not deducted from balances until the due date.</div>`;
   if (!dates.length) h += '<div class="empty">No transactions this month.<br>Tap + to add one.</div>';
   if (later.length && upto.length) {
@@ -307,7 +325,7 @@ function viewCalendar() {
   const proj = M.projected(S, start, end);
   const agg = {};
   const bucket = d => (agg[d] = agg[d] || { inc: 0, exp: 0, sch: 0, n: 0 });
-  posted.forEach(t => { const b = bucket(t.date); if (t.type === 'income') b.inc += +t.amount; else if (t.type !== 'transfer') b.exp += +t.amount; });
+  posted.forEach(t => { const b = bucket(t.date), v = M.netAmount(S, t); if (t.type === 'income') { b.inc += v; if (t.offsetCategoryId) b.exp -= +t.amount; } else if (t.type !== 'transfer') b.exp += v; });
   proj.forEach(t => { const b = bucket(t.date); b.sch += t.type === 'income' ? 0 : +t.amount; b.n++; });
   let h = monthNav() + '<div class="cal">' + WD.map(w => `<div class="h">${w}</div>`).join('');
   for (let d = start; d <= end; d = M.addDays(d, 1)) {
@@ -383,7 +401,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.13-a';
+const APP_VERSION = '2026.11.16-a';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -397,6 +415,7 @@ function viewMore() {
     ${item('suggestions', '✨', 'Smart suggestions', 'Duplicate schedules, regular bills not yet scheduled')}
     ${item('forecast', '📈', 'Cash-flow forecast', 'Next 60 days for each bank account')}
     ${item('budgets', '🎯', 'Monthly budgets')}
+    ${item('owedScreen', '👥', 'Owed to me', (() => { const o = M.owedList(S); return o.length ? `${fmt(o.reduce((a, t) => a + M.owedLeft(S, t), 0))} from ${o.length} purchase${o.length === 1 ? '' : 's'}` : 'Purchases someone will pay you back for'; })())}
     ${A.enabled() ? item('askScreen', '💬', 'Ask MoneyBook', 'Questions about your money, answered from your data') : ''}
     ${item('taxReports', '🧾', 'Rental & business reports', 'Tax-year totals, rental share, HST')}
     ${item('importStatement', '📥', 'Import statement, CSV or screenshots', 'PDF statements, bank CSV files, banking-app screenshots')}
@@ -411,17 +430,20 @@ function viewMore() {
 }
 
 // ---------- sheet ----------
+// When a sheet was opened from another one (e.g. a transaction from an account), closing it goes back there.
+let sheetReturn = null;
 function openSheet(title, html) {
+  sheetReturn = null;
   $('#sheet .sheet-body').innerHTML = `<h2>${esc(title)}<button data-act="closeSheet" aria-label="Close">✕</button></h2>${html}`;
   $('#sheet').classList.remove('hidden');
   $('#sheet .sheet-body').scrollTop = 0;
   return $('#sheet .sheet-body');
 }
-const closeSheet = () => $('#sheet').classList.add('hidden');
+const closeSheet = () => { const r = sheetReturn; sheetReturn = null; if (r) return r(); $('#sheet').classList.add('hidden'); };
 const fv = (f, n) => f.elements[n]?.value?.trim() ?? '';
 
 // ---------- transaction editor ----------
-function editTxn(t, preset = {}) {
+function editTxn(t, preset = {}, { returnTo } = {}) {
   const isNew = !t;
   t = t ? { ...t } : { id: M.uid(), type: 'expense', date: today(), amount: '', accountId: defaultAccount(), categoryId: '', note: '', desc: '', ...preset };
   const body = openSheet(isNew ? 'Add transaction' : 'Edit transaction', `
@@ -443,6 +465,20 @@ function editTxn(t, preset = {}) {
           <div id="splitRows"></div>
           <div class="btnrow" style="padding:6px 0 0"><button type="button" class="secondary" id="itemize">🧾 Item list</button><button type="button" class="secondary" id="addLine">+ Line</button><button type="button" class="secondary" id="usual">Usual split here</button><button type="button" class="secondary" id="noSplit">No split</button></div>
           <div id="splitMsg" class="hint" style="margin-bottom:0"></div>
+        </div>
+      </div>
+      <div class="f-refund card" style="margin-bottom:10px;padding:10px">
+        <div id="rfHint" class="hint" style="margin:0 0 6px"></div>
+        <label class="check" style="margin:0"><input type="checkbox" id="rfOn"> <span>↩️ Money back for a purchase<br><small class="sub2">a refund, or someone paying you back</small></span></label>
+        <div id="rfBox"></div>
+      </div>
+      <div class="f-owe card" style="margin-bottom:10px;padding:10px">
+        <div id="rbInfo"></div>
+        <label class="check" style="margin:0"><input type="checkbox" id="owOn" ${t.owed ? 'checked' : ''}> 👥 Someone owes me for this</label>
+        <div id="owBox" class="hidden-f" style="margin-top:6px">
+          <div class="two"><label>Who<input name="owWho" value="${esc(t.owed?.who || '')}" placeholder="e.g. Raj" autocomplete="off"></label>
+          <label>Amount owed<input type="text" inputmode="decimal" data-money autocomplete="off" name="owAmt" value="${t.owed?.amount ?? ''}" placeholder="all of it"></label></div>
+          <label>Remind me<select name="owRem">${[['', 'No reminder'], [3, 'In 3 days'], [7, 'In a week'], [14, 'In 2 weeks'], [30, 'In a month']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}${t.owed?.remind ? `<option value="keep" selected>On ${t.owed.remind}</option>` : ''}</select></label>
         </div>
       </div>
       <label class="f-mort">Mortgage<select name="mortgageId">${mortgageOptions(t.mortgageId)}</select></label>
@@ -468,6 +504,8 @@ function editTxn(t, preset = {}) {
     body.querySelectorAll('.f-scan').forEach(e => e.classList.toggle('hidden-f', ty !== 'expense'));
     body.querySelectorAll('.f-tag').forEach(e => e.classList.toggle('hidden-f', ty === 'transfer'));
     body.querySelectorAll('.f-split').forEach(e => e.classList.toggle('hidden-f', ty !== 'expense'));
+    body.querySelectorAll('.f-refund').forEach(e => e.classList.toggle('hidden-f', ty !== 'income'));
+    body.querySelectorAll('.f-owe').forEach(e => e.classList.toggle('hidden-f', ty !== 'expense'));
     body.querySelectorAll('.f-cat').forEach(e => e.classList.toggle('hidden-f', ty === 'transfer' || ty === 'mortgage' || (ty === 'expense' && splitOn)));
     body.querySelector('.lbl-acc').textContent = ty === 'transfer' ? 'From account' : ty === 'mortgage' ? 'Paid from' : 'Account';
     f.categoryId.innerHTML = categoryOptions(ty === 'income' ? 'income' : 'expense', t.categoryId);
@@ -505,14 +543,107 @@ function editTxn(t, preset = {}) {
     if (sg.accountId) f.accountId.value = sg.accountId;
   };
   applyType(); futureHint();
+  const amt = () => parseFloat(f.amount.value) || 0;
+
+  // ---- money back: link this income to the purchase(s) it pays back ----
+  const links = new Map((t.reimburses || []).map(l => [l.id, +l.amount]));
+  let rfOn = links.size > 0 || !!t.offsetCategoryId, rfQuery = '', rfMonths = S.settings.refundMonths || 6, offsetOn = !!t.offsetCategoryId;
+  const rfCats = () => M.refundCandidates(S, { id: t.id, amount: amt(), date: f.date.value, note: f.note.value, reimburses: isNew ? [] : (M.get(S, 'transactions', t.id)?.reimburses || []) }, { months: rfMonths, query: rfQuery });
+  const linkedSum = () => M.round2([...links.values()].reduce((a, v) => a + (+v || 0), 0));
+  function renderRefund() {
+    body.querySelector('#rfOn').checked = rfOn;
+    const box = body.querySelector('#rfBox'), hint = body.querySelector('#rfHint');
+    syncRefundCat();
+    if (!rfOn) {
+      box.innerHTML = '';
+      const best = t.type === 'income' && amt() > 0 && rfCats().find(c => c.exact);
+      const h = best ? `💡 Looks like money back for <b>${esc(best.t.note || txLabel(best.t))}</b> (${fmt(best.t.amount)}, ${best.t.date})${best.t.owed ? ` — ${esc(best.t.owed.who || '')} owes ${fmt(best.owe)}` : ''} <button type="button" class="secondary" data-link="${best.t.id}" style="padding:4px 10px;margin:4px 0 0">Link it</button>` : '';
+      if (hint._h !== h) { hint._h = h; hint.innerHTML = h; }   // don't swap the button out from under a tap
+      return;
+    }
+    hint.innerHTML = hint._h = '';
+    const cands = rfCats(), shown = cands.filter((c, i) => i < 8 || links.has(c.t.id));
+    box.innerHTML = `<label class="check" style="margin:8px 0 4px"><input type="checkbox" id="rfOff" ${offsetOn ? 'checked' : ''}> No matching purchase — lower an expense category instead</label>` + (offsetOn
+      ? `<label>Category it lowers<select id="rfCat">${categoryOptions('expense', t.offsetCategoryId)}</select></label><div class="hint">The full amount counts against this category in this month, not as income.</div>`
+      : `<div style="display:flex;gap:6px;margin-top:6px"><input id="rfQ" type="search" placeholder="Find: store, person or amount" value="${esc(rfQuery)}" style="margin:0;flex:1" autocomplete="off">
+          <select id="rfM" style="margin:0;width:auto" aria-label="How far back">${[3, 6, 12, 24].map(n => `<option value="${n}" ${n === rfMonths ? 'selected' : ''}>${n} mo</option>`).join('')}</select></div>
+        <div id="rfList">${shown.map(c => `<div class="rf-row" data-rf="${c.t.id}"><input type="checkbox" ${links.has(c.t.id) ? 'checked' : ''} aria-label="Link">
+          <div>${esc(c.t.note || txLabel(c.t))} · ${fmt(c.t.amount)}${c.exact ? ' <span class="pill">match</span>' : ''}<small>${c.t.date} · ${esc(M.accName(S, c.t.accountId))}${c.left < +c.t.amount - 0.004 ? ` · ${fmt(c.left)} left` : ''}${c.t.owed ? ` · 👥 ${esc(c.t.owed.who || '')} owes ${fmt(c.owe)}` : ''}</small></div>
+          ${links.has(c.t.id) ? `<input type="text" inputmode="decimal" data-money autocomplete="off" value="${links.get(c.t.id)}" aria-label="Amount for this purchase">` : '<span></span>'}</div>`).join('') || `<div class="empty" style="padding:12px">No purchases in the last ${rfMonths} months${rfQuery ? ' match' : ''}.</div>`}</div>
+        <div class="hint" id="rfSum" style="margin-bottom:0">${rfSummary()}</div>`);
+    const q = box.querySelector('#rfQ');
+    if (q) q.oninput = () => { rfQuery = q.value; const pos = q.selectionStart; renderRefund(); const q2 = box.querySelector('#rfQ'); q2.focus(); q2.setSelectionRange(pos, pos); };
+    box.querySelector('#rfM')?.addEventListener('change', e => { rfMonths = +e.target.value; renderRefund(); });
+    box.querySelector('#rfOff').onchange = e => { offsetOn = e.target.checked; if (offsetOn) links.clear(); renderRefund(); };
+    box.querySelector('#rfCat')?.addEventListener('change', e => { t.offsetCategoryId = e.target.value; });
+  }
+  function rfSummary() {
+    const left = M.round2(amt() - linkedSum());
+    return links.size ? (left < -0.004 ? `<span class="exp">Linked ${fmt(linkedSum())} — ${fmt(-left)} more than this amount</span>`
+      : `Linked ${fmt(linkedSum())}. ${left > 0.004 ? `The other ${fmt(left)} counts as income (pick its category above).` : 'None of it counts as income.'} The purchase${links.size > 1 ? 's' : ''} will show the net cost in ${links.size > 1 ? 'their' : 'its'} own month.`)
+      : 'Tick the purchase this pays back. Partial amounts are fine.';
+  }
+  // Amount typed after linking: keep the list as is (so a tap on it isn't lost), just refresh the totals.
+  function amountChanged() {
+    if (!rfOn || offsetOn) return renderRefund();
+    if (links.size === 1 && amt() > 0) {   // one purchase: it follows the amount, up to what's left on it
+      const [id] = links.keys(), c = rfCats().find(x => x.t.id === id);
+      const v = M.round2(Math.min(amt(), c ? c.left : amt())); links.set(id, v);
+      const inp = body.querySelector(`[data-rf="${id}"] input[data-money]`); if (inp) inp.value = v;
+    }
+    const sm = body.querySelector('#rfSum'); if (sm) sm.innerHTML = rfSummary();
+    syncRefundCat();
+  }
+  // A fully linked refund needs no income category.
+  function syncRefundCat() {
+    if (t.type !== 'income') return;
+    const full = rfOn && (offsetOn || (links.size && Math.abs(amt() - linkedSum()) < 0.005));
+    body.querySelectorAll('.f-cat').forEach(e => e.classList.toggle('hidden-f', !!full));
+  }
+  body.querySelector('#rfBox').addEventListener('change', e => {
+    const row = e.target.closest('[data-rf]'); if (!row) return;
+    const id = row.dataset.rf;
+    if (e.target.type === 'checkbox') {
+      if (e.target.checked) {
+        const c = rfCats().find(x => x.t.id === id); const rest = M.round2(amt() - linkedSum());
+        if (!(amt() > 0)) f.amount.value = c.left.toFixed(2);
+        links.set(id, M.round2(Math.min(c.left, rest > 0 ? rest : c.left)));
+        if (!f.note.value && c.t.owed?.who) f.note.value = `${c.t.owed.who} paid back`;
+      } else links.delete(id);
+      renderRefund();
+    } else { links.set(id, M.round2(parseFloat(e.target.value) || 0)); renderRefund(); }
+  });
+  body.querySelector('#rfOn').onchange = e => { rfOn = e.target.checked; renderRefund(); };
+  body.querySelector('#rfHint').addEventListener('click', e => {
+    const id = e.target.closest('[data-link]')?.dataset.link; if (!id) return;
+    const c = rfCats().find(x => x.t.id === id); if (!c) return;
+    rfOn = true; links.set(id, M.round2(Math.min(c.left, amt() || c.left))); renderRefund();
+  });
+  f.amount.addEventListener('change', amountChanged);
+  f.note.addEventListener('change', () => { if (!rfOn) renderRefund(); });
+  f.date.addEventListener('change', () => renderRefund());
+  body.querySelector('#ttype').addEventListener('click', () => setTimeout(() => { renderRefund(); renderOwe(); }));
+
+  // ---- someone owes me / what has been paid back on this purchase ----
+  function renderOwe() {
+    body.querySelector('#owBox').classList.toggle('hidden-f', !body.querySelector('#owOn').checked);
+    const info = body.querySelector('#rbInfo'); if (isNew || t.type !== 'expense') return (info.innerHTML = '');
+    const back = M.reimbursementsFor(S, t.id), tot = M.reimbursedOf(S, t.id);
+    info.innerHTML = (tot ? `<div class="hint" style="margin:0 0 6px">↩️ <b>${fmt(tot)} paid back</b> — counts as <b>${fmt(M.round2(t.amount - tot))}</b> in reports.<br>${back.map(b => `${b.t.date} · ${esc(b.t.note || 'Money back')} · ${fmt(b.amount)}`).join('<br>')}</div>` : '') +
+      (M.round2(t.amount - tot) > 0.004 ? `<button type="button" class="secondary" id="gotBack" style="width:100%;margin:0 0 8px">↩️ Record money back / refund</button>` : '');
+    const gb = info.querySelector('#gotBack');
+    if (gb) gb.onclick = () => gotPaid(t.id, () => editTxn(M.get(S, 'transactions', t.id), {}, { returnTo }));
+  }
+  body.querySelector('#owOn').onchange = () => { if (body.querySelector('#owOn').checked && !f.owAmt.value && amt()) f.owAmt.value = amt().toFixed(2); renderOwe(); };
+  renderRefund(); renderOwe();
 
   // ---- split one bill across categories (from receipt items or by hand) ----
   const box = body.querySelector('#splitBox');
-  const amt = () => parseFloat(f.amount.value) || 0;
   function renderSplit() {
     box.classList.toggle('hidden-f', !splitOn);
     body.querySelector('#splitBtn').classList.toggle('hidden-f', splitOn);
-    body.querySelectorAll('.f-cat').forEach(e => e.classList.toggle('hidden-f', t.type !== 'expense' || splitOn));
+    body.querySelectorAll('.f-cat').forEach(e => e.classList.toggle('hidden-f', t.type === 'transfer' || t.type === 'mortgage' || (t.type === 'expense' && splitOn)));
+    syncRefundCat();
     body.querySelector('#splitRows').innerHTML = splits.map((x, i) => `<div style="display:grid;grid-template-columns:1fr 96px 34px;gap:6px;align-items:center" data-r="${i}">
       <select data-k="cat">${categoryOptions('expense', x.categoryId)}</select><input data-k="amt" type="text" inputmode="decimal" data-money autocomplete="off" value="${x.amount}" style="margin-top:4px">
       <button type="button" class="secondary" data-k="x" style="padding:8px 0;margin-top:4px" aria-label="Remove line">✕</button></div>`).join('');
@@ -663,7 +794,7 @@ function editTxn(t, preset = {}) {
     } catch (err) { msg('Could not read receipt: ' + err.message); }
   };
 
-  if (!isNew) body.querySelector('#del').onclick = () => { if (confirm('Delete this transaction?')) { M.remove(S, 'transactions', t.id); closeSheet(); commit(); toast('Deleted'); } };
+  if (!isNew) body.querySelector('#del').onclick = () => { if (confirm(M.reimbursedOf(S, t.id) ? 'Delete this purchase? The money paid back for it will count as income again.' : 'Delete this transaction?')) { M.remove(S, 'transactions', t.id); closeSheet(); commit(); toast('Deleted'); } };
   f.onsubmit = e => {
     e.preventDefault();
     const amount = parseFloat(f.amount.value);
@@ -691,7 +822,34 @@ function editTxn(t, preset = {}) {
     rec.hst = t.type !== 'transfer' && +f.hst.value > 0 ? M.round2(+f.hst.value) : undefined;
     if (t.type === 'transfer' && (!rec.toAccountId || rec.toAccountId === rec.accountId)) return toast('Choose a different “to” account');
     if (t.type === 'mortgage' && !rec.mortgageId) return toast('Add a mortgage first (More › Mortgages)');
-    if ((t.type === 'expense' || t.type === 'income') && !rec.categoryId) return toast('Choose a category');
+    // money back for purchases
+    rec.reimburses = undefined; rec.offsetCategoryId = undefined;
+    let fullBack = false;
+    if (t.type === 'income' && rfOn) {
+      if (offsetOn) {
+        rec.offsetCategoryId = body.querySelector('#rfCat')?.value || t.offsetCategoryId;
+        if (!rec.offsetCategoryId) return toast('Choose the category this money back lowers');
+      } else {
+        const ls = [...links].filter(([, v]) => +v > 0).map(([id, v]) => ({ id, amount: M.round2(+v) }));
+        if (!ls.length) return toast('Tick the purchase this pays back, or untick “Money back”');
+        const cands = Object.fromEntries(M.refundCandidates(S, { id: t.id, amount: rec.amount, date: rec.date, reimburses: isNew ? [] : (M.get(S, 'transactions', t.id)?.reimburses || []) }, { months: 120 }).map(c => [c.t.id, c]));
+        for (const l of ls) { const left = cands[l.id]?.left ?? 0; if (l.amount > left + 0.004) return toast(left > 0 ? `Only ${fmt(left)} is left to pay back on that purchase` : 'That purchase is dated after this money back', 3500); }
+        if (ls.reduce((a, l) => a + l.amount, 0) > rec.amount + 0.004) return toast('Linked amounts are more than this amount');
+        rec.reimburses = ls;
+      }
+      fullBack = !!rec.offsetCategoryId || Math.abs(rec.amount - rec.reimburses.reduce((a, l) => a + l.amount, 0)) < 0.005;
+      if (fullBack) rec.categoryId = undefined;   // shows as "↩️ Money back"
+    }
+    rec.owed = undefined;
+    if (t.type === 'expense' && body.querySelector('#owOn').checked) {
+      const oa = M.round2(parseFloat(f.owAmt.value) || rec.amount), rem = f.owRem.value;
+      if (oa > rec.amount + 0.004) return toast('Owed amount is more than the purchase');
+      rec.owed = { who: fv(f, 'owWho'), amount: oa };
+      const rd = rem === 'keep' ? t.owed?.remind : rem ? M.addDays(today(), +rem) : '';
+      if (rd) rec.owed.remind = rd;
+    }
+    if (!fullBack && (t.type === 'expense' || t.type === 'income') && !rec.categoryId) return toast('Choose a category');
+    if (rfMonths !== (S.settings.refundMonths || 6)) S.settings = { ...S.settings, refundMonths: rfMonths, updatedAt: Date.now() };
     L.lastAccountId = rec.accountId; saveLocal();
     if (t.type === 'expense' && rec.note) R.learn(S, rec.note, rec.accountId, rec.categoryId);
     const repeat = isNew && f.repeat.value;
@@ -701,9 +859,18 @@ function editTxn(t, preset = {}) {
       M.put(S, 'recurring', r);
       M.materialize(S);
       toast('Repeat payment created');
-    } else { M.put(S, 'transactions', rec); toast(rec.date > today() ? 'Scheduled ⏰' : 'Saved'); }
+    } else { M.put(S, 'transactions', rec); savedTxnId = rec.id; toast(rec.date > today() ? 'Scheduled ⏰' : rec.reimburses ? 'Saved — linked to the purchase ↩️' : 'Saved'); }
     closeSheet(); commit();
   };
+  sheetReturn = returnTo || null;
+}
+let savedTxnId = null;   // the transaction just saved, so the screen we go back to can show it
+// Record money coming back for a purchase: a new income, already linked to it.
+function gotPaid(id, back) {
+  const e = M.get(S, 'transactions', id); if (!e) return;
+  const left = M.owedLeft(S, e) || M.round2(e.amount - M.reimbursedOf(S, id));
+  if (left <= 0.004) return toast('This purchase is already fully paid back');
+  editTxn(null, { type: 'income', amount: left.toFixed(2), accountId: defaultAccount(), categoryId: '', note: e.owed?.who ? `${e.owed.who} paid back` : `Refund ${e.note || ''}`.trim(), reimburses: [{ id, amount: left }] }, { returnTo: back });
 }
 
 // ---------- recurring ----------
@@ -904,8 +1071,9 @@ function mortgageDetail(m) {
     ${(m.rateChanges || []).length ? `<div class="hint pad">Terms history: ${[...(m.rateChanges || [])].sort((a, b) => a.date.localeCompare(b.date)).map(c => `${c.date} → ${c.rate ? c.rate + '%' : ''}${c.frequency ? ' ' + M.MORT_FREQ[c.frequency] : ''}${c.payment ? ' ' + fmt(c.payment) : ''}`).join(' · ')}</div>` : ''}
     <div class="hint pad">Interest is calculated per payment using Canadian rules (fixed rates compound semi-annually). Balances from lender statements are used as checkpoints, so the tracked balance always lines up with your statements.</div>`);
   const pay = { type: 'mortgage', mortgageId: m.id, amount: m.payment, note: m.lender || m.name };
-  body.querySelector('#pay').onclick = () => editTxn(null, pay);
-  body.querySelector('#pre').onclick = () => editTxn(null, { ...pay, amount: '', prepayment: true, note: 'Mortgage prepayment' });
+  const backM = () => mortgageDetail(M.get(S, 'mortgages', m.id) || m);
+  body.querySelector('#pay').onclick = () => editTxn(null, pay, { returnTo: backM });
+  body.querySelector('#pre').onclick = () => editTxn(null, { ...pay, amount: '', prepayment: true, note: 'Mortgage prepayment' }, { returnTo: backM });
   body.querySelector('#edit').onclick = () => editMortgage(m);
   body.querySelector('#link').onclick = () => linkMortgagePayments(m);
   body.querySelector('#mkrec')?.addEventListener('click', () => {
@@ -1154,13 +1322,14 @@ function settings() {
     <label>HST rate % (for the HST button on transactions)<input type="number" min="0" max="20" step="0.5" name="hst" value="${S.settings.hstRate ?? 13}"></label>
     <label>Remind me this many days before a payment<input type="number" min="0" max="28" name="rd" value="${S.settings.remindDays ?? 3}"></label>
     <div class="hint">Used for the upcoming banner, this device's notification when you open the app, and new Google Calendar reminders.</div>
+    <label>Money back: look for matching purchases from the last<select name="rfm">${[3, 6, 12, 24].map(n => `<option value="${n}" ${(S.settings.refundMonths || 6) === n ? 'selected' : ''}>${n} months</option>`).join('')}</select></label>
     <div class="row"><button class="primary">Save</button></div></form>
     <div class="section-title">Notifications on this device</div>
     <div class="pad hint">Status: <b>${perm}</b>. Browsers can only notify when the app is opened; for reliable alerts while it's closed, use the 🔔 Google Calendar reminder on repeat payments.</div>
     <div class="btnrow"><button class="secondary" id="np">Allow notifications</button></div>`);
   const f = body.querySelector('#f');
   f.theme.onchange = () => { L.theme = f.theme.value; saveLocal(); applyTheme(); };
-  f.onsubmit = e => { e.preventDefault(); L.theme = f.theme.value; saveLocal(); applyTheme(); S.settings = { ...S.settings, remindDays: Math.max(0, +f.rd.value || 0), hstRate: +f.hst.value || 13, updatedAt: Date.now() }; commit(); closeSheet(); toast('Saved'); };
+  f.onsubmit = e => { e.preventDefault(); L.theme = f.theme.value; saveLocal(); applyTheme(); S.settings = { ...S.settings, remindDays: Math.max(0, +f.rd.value || 0), hstRate: +f.hst.value || 13, refundMonths: +f.rfm.value || 6, updatedAt: Date.now() }; commit(); closeSheet(); toast('Saved'); };
   body.querySelector('#np').onclick = async () => {
     if (!('Notification' in window)) return toast('Not supported in this browser');
     const p = await Notification.requestPermission(); toast('Notifications: ' + p); if (p === 'granted') { L.lastNotified = ''; notifyUpcoming(); }
@@ -1183,7 +1352,8 @@ function showStatsCat(topId) {
   const rows = Object.entries(leaf).filter(([id]) => (M.topCatId(S, id) || id) === topId).sort((a, b) => b[1] - a[1]);
   const tx = M.live(S, 'transactions').filter(t => t.date >= from && t.date <= to && t.date <= today() &&
     ((t.type === statsType && (t.splits?.length ? t.splits.map(x => x.categoryId) : [t.categoryId]).some(id => (M.topCatId(S, id) || id || 'none') === topId)) ||
-     (statsType === 'expense' && t.type === 'mortgage' && M.get(S, 'mortgages', t.mortgageId)?.categoryId === topId)))
+     (statsType === 'expense' && t.type === 'mortgage' && M.get(S, 'mortgages', t.mortgageId)?.categoryId === topId) ||
+     (statsType === 'expense' && t.type === 'income' && t.offsetCategoryId && (M.topCatId(S, t.offsetCategoryId) || t.offsetCategoryId) === topId)))
     .sort((a, b) => b.date.localeCompare(a.date));
   const { map } = M.mortgageSplits(S);
   const c = M.get(S, 'categories', topId);
@@ -1570,6 +1740,25 @@ function catPackBanner() {
   return `<div class="banner" style="display:flex;gap:8px;align-items:center"><span style="flex:1">🗂️ <b>New categories available</b> — subscriptions, medicines, dry fruits, kids' clothes, car maintenance and more. Pick the ones you want.</span><button class="secondary" data-act="catPackReview" style="padding:6px 12px">Review</button><button class="secondary" data-act="catPackDismiss" style="padding:6px 10px" aria-label="Dismiss">✕</button></div>`;
 }
 const catPackDone = () => { S.settings = { ...S.settings, catPack: 3, updatedAt: Date.now() }; commit(); };
+// ---------- owed to me ----------
+function owedBanner() {
+  const o = M.owedList(S); if (!o.length || o.length === owedDue().length) return '';   // all already under "Needs attention"
+  const tot = o.reduce((a, t) => a + M.owedLeft(S, t), 0), who = [...new Set(o.map(t => t.owed.who).filter(Boolean))];
+  return `<div class="banner" data-act="owedScreen" style="cursor:pointer">👥 <b>${fmt(tot)} owed to you</b>${who.length ? ' by ' + esc(who.slice(0, 3).join(', ')) + (who.length > 3 ? '…' : '') : ''} — tap to see or mark paid ›</div>`;
+}
+function owedScreen() {
+  const o = M.owedList(S), t0 = today();
+  const byWho = {}; o.forEach(t => { const k = t.owed.who || '—'; byWho[k] = (byWho[k] || 0) + M.owedLeft(S, t); });
+  const body = openSheet('Owed to me', `
+    <div class="hint">Purchases you made for someone else. When they pay you (cash or e-transfer), tap <b>Got paid</b> — the money is linked to the purchase, so it isn't counted as income and the purchase only counts for your share.</div>
+    ${Object.keys(byWho).length > 1 ? `<div class="list">${Object.entries(byWho).sort((a, b) => b[1] - a[1]).map(([w, v]) => `<div class="li"><div class="grow">${esc(w)}</div><b>${fmt(v)}</b></div>`).join('')}</div><div class="section-title">Purchases</div>` : ''}
+    <div class="list">${o.map(t => `<div class="li" data-ow="${t.id}"><div class="grow">${esc(t.owed.who || 'Someone')} · ${esc(t.note || txLabel(t))}
+      <small>${t.date} · paid ${fmt(t.amount)}${M.reimbursedOf(S, t.id) ? ` · ${fmt(M.reimbursedOf(S, t.id))} back so far` : ''}${t.owed.remind ? ` · ${t.owed.remind <= t0 ? '<span class="exp">reminder ' + t.owed.remind + '</span>' : 'reminder ' + t.owed.remind}` : ''}</small></div>
+      <b>${fmt(M.owedLeft(S, t))}</b><button class="secondary" data-gp="${t.id}" style="padding:6px 10px;margin-left:6px">Got paid</button></div>`).join('') || '<div class="empty">Nobody owes you anything right now.<br>When you add an expense, tick “👥 Someone owes me for this”.</div>'}</div>`);
+  body.querySelectorAll('[data-gp]').forEach(b => (b.onclick = e => { e.stopPropagation(); gotPaid(b.dataset.gp, owedScreen); }));
+  body.querySelectorAll('[data-ow]').forEach(el => (el.onclick = () => editTxn(M.get(S, 'transactions', el.dataset.ow), {}, { returnTo: owedScreen })));
+}
+const owedDue = () => M.owedList(S).filter(t => t.owed.remind && t.owed.remind <= today());
 function attentionHtml() {
   const rd = S.settings.remindDays ?? 3;
   const cards = X.cardStatuses(S).filter(c => c.status === 'due' || c.status === 'overdue');
@@ -1577,8 +1766,8 @@ function attentionHtml() {
   const nSug = suggestionCount();
   const m0 = M.ymd(new Date(new Date().getFullYear(), new Date().getMonth(), 1)), m1 = M.ymd(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0));
   const buds = X.budgetStatus(S, m0, m1).filter(b => b.status === 'over' || b.status === 'near');
-  const lows = forecastLows();
-  if (!cards.length && !bills.length && !nSug && !buds.length && !lows.length) return '';
+  const lows = forecastLows(), owes = owedDue();
+  if (!cards.length && !bills.length && !nSug && !buds.length && !lows.length && !owes.length) return '';
   const line = (icon, main, sub, btns, warn) => `<div class="li"><span style="font-size:20px">${icon}</span><div class="grow"><span class="${warn ? 'exp' : ''}">${main}</span><small>${sub}</small></div>${btns}</div>`;
   return `<div class="section-title">Needs attention</div><div class="list">` +
     cards.map(c => line('💳', `${esc(c.account.name)} — ${fmt(c.remaining)} ${c.status === 'overdue' ? 'was due' : 'due'} ${c.dueDate.slice(5)}`,
@@ -1587,6 +1776,8 @@ function attentionHtml() {
     bills.map(b => line('🔌', `${esc(b.recurring.template.note || 'Bill')} — about ${fmt(b.recurring.template.amount)}`,
       `${b.overdue ? `Usually around ${b.date.slice(5)} — not added yet` : `Due ${b.date.slice(5)} · reminder`}`,
       `<button class="secondary" data-act="addBill" data-id="${b.recurring.id}" data-date="${b.date}" style="padding:6px 10px">Add</button><button class="secondary" data-act="skipBill" data-id="${b.recurring.id}" data-date="${b.date}" style="padding:6px 8px;margin-left:4px">Skip</button>`, b.overdue)).join('') +
+    owes.map(t => line('👥', `${esc(t.owed.who || 'Someone')} owes you ${fmt(M.owedLeft(S, t))}`, `${esc(t.note || txLabel(t))} on ${t.date} · reminder ${t.owed.remind}`,
+      `<button class="secondary" data-act="gotPaid" data-id="${t.id}" style="padding:6px 10px">Got paid</button>`)).join('') +
     lows.map(a => line('📉', `${esc(a.name)} may drop to ${fmt(a.min)}`, `around ${a.minDate.slice(5)} with scheduled payments — see forecast`, '<span class="chev">›</span>', true).replace('<div class="li">', '<div class="li" data-act="forecast">')).join('') +
     buds.map(b => line('🎯', `${esc(b.category.name)}: ${fmt(b.spent)} of ${fmt(b.budget)}`, b.status === 'over' ? `${fmt(-b.left)} over budget this month` : `${Math.round(b.pct * 100)}% used`, '<span class="chev">›</span>', b.status === 'over').replace('<div class="li">', '<div class="li" data-act="budgets">')).join('') +
     (nSug ? line('✨', `${nSug} suggestion${nSug === 1 ? '' : 's'} for your scheduled payments`, 'Duplicates to remove and regular bills to schedule', '<span class="chev">›</span>').replace('<div class="li">', '<div class="li" data-act="suggestions">') : '') +
@@ -1779,7 +1970,7 @@ function budgetTotalHtml(bs, from, to) {
   const d0 = M.parseYmd(from), dim = new Date(d0.getFullYear(), d0.getMonth() + 1, 0).getDate();
   const elapsed = t0 >= to ? 1 : t0 < from ? 0 : M.parseYmd(t0).getDate() / dim;
   const col = pct >= 1 ? 'var(--exp)' : pct >= 0.9 || pct > elapsed + 0.15 ? 'var(--sched)' : 'var(--inc)';
-  const allExp = M.sumIE(M.live(S, 'transactions').filter(t => t.date >= from && t.date <= to && t.date <= t0)).exp;
+  const allExp = M.sumIE(M.live(S, 'transactions').filter(t => t.date >= from && t.date <= to && t.date <= t0), S).exp;
   return `<div class="li" style="display:block;border-bottom:2px solid var(--line)">
     <div style="display:flex;justify-content:space-between;align-items:baseline"><b>Total budget</b><b class="${pct >= 1 ? 'exp' : ''}">${fmt(spent)} / ${fmt(budget)}</b></div>
     <div class="bar" style="height:10px;position:relative"><i style="width:${Math.min(100, pct * 100).toFixed(1)}%;background:${col}"></i>${elapsed > 0 && elapsed < 1 ? `<span title="Today" style="position:absolute;left:${(elapsed * 100).toFixed(1)}%;top:-3px;bottom:-3px;width:2px;background:var(--ink);opacity:.6"></span>` : ''}</div>
@@ -1925,14 +2116,38 @@ function sumPeriod(es, from, to, openBal) {
   for (const e of es) { if (e.t.date < from) { end = e.bal; continue; } if (e.t.date > to) break; if (e.v > 0) dep += e.v; else wd -= e.v; end = e.bal; }
   return { dep: M.round2(dep), wd: M.round2(wd), net: M.round2(dep - wd), end };
 }
-function accountDetail(id, view = L.accView || 'daily', anchor) {
+// Credit cards: the billing cycle whose statement closes in month ym ("2026-11") — the day after the previous
+// statement up to and including this one. Uses real statement dates where known, else the statement day.
+function cycleBounds(a, ym) {
+  const hist = [...new Set((a.cycles || []).map(c => c.statementDate).filter(Boolean))].sort();
+  const day = +(hist.length ? hist[hist.length - 1].slice(8, 10) : a.statementDay) || 0;
+  const stmtIn = (y, m) => {   // m is 1-12
+    const k = `${y}-${String(m).padStart(2, '0')}`, h = hist.filter(d => d.startsWith(k)).pop();
+    return h || (day ? M.ymd(new Date(y, m - 1, Math.min(day, M.daysInMonth(y, m - 1)))) : null);
+  };
+  const [y, m] = ym.split('-').map(Number), p = new Date(y, m - 2, 1);
+  const end = stmtIn(y, m), prev = stmtIn(p.getFullYear(), p.getMonth() + 1);
+  return end && prev ? { from: M.addDays(prev, 1), to: end } : null;
+}
+const hasCycle = a => X.accountKind(S, a.id) === 'card' && !!cycleBounds(a, today().slice(0, 7));
+// Which cycle (named by its closing month) a date falls in.
+function cycleMonthOf(a, d) {
+  const ym = d.slice(0, 7), b = cycleBounds(a, ym);
+  if (b && d > b.to) { const [y, m] = ym.split('-').map(Number), n = new Date(y, m, 1); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`; }
+  return ym;
+}
+const md = d => `${MONTHS[+d.slice(5, 7) - 1]} ${+d.slice(8)}`;
+function accountDetail(id, view = L.accView || 'daily', anchor, flashId) {
   const a = M.get(S, 'accounts', id); if (!a) return;
   const mort = M.live(S, 'mortgages').find(m => m.accountId === id); if (mort) return mortgageDetail(mort);
   L.accView = view; saveLocal();
   const t0 = today();
-  anchor = anchor || (view === 'daily' ? t0.slice(0, 7) : t0.slice(0, 4));
+  // Credit cards can be read by calendar month or by billing cycle (remembered per card).
+  const canCycle = hasCycle(a), byCycle = canCycle && !!(L.cycleView || {})[id];
+  anchor = anchor || (view === 'daily' ? (byCycle ? cycleMonthOf(a, t0) : t0.slice(0, 7)) : t0.slice(0, 4));
   const es = accountEntries(id), open = +a.opening || 0;
-  const tabs = `<div class="seg" id="av">${[['daily', 'Daily'], ['monthly', 'Monthly'], ['annual', 'Annually']].map(([k, l]) => `<button data-v="${k}" class="${view === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const tabs = `<div class="seg" id="av">${[['daily', 'Daily'], ['monthly', 'Monthly'], ['annual', 'Annually']].map(([k, l]) => `<button data-v="${k}" class="${view === k ? 'on' : ''}">${l}</button>`).join('')}</div>` +
+    (canCycle && view !== 'annual' ? `<div class="seg" id="cy" style="margin-top:-4px"><button data-c="0" class="${byCycle ? '' : 'on'}">📅 Calendar month</button><button data-c="1" class="${byCycle ? 'on' : ''}">💳 Billing cycle</button></div>` : '');
   const head = (label, s) => `<div class="card" style="margin-bottom:8px"><small>Statement ${label}</small>
     <div class="summary" style="grid-template-columns:repeat(4,1fr);padding:6px 0 0;border:0;background:none">
       <div><small>Deposit</small><b class="inc">${fmt(s.dep)}</b></div><div><small>Withdrawal</small><b class="exp">${fmt(s.wd)}</b></div>
@@ -1941,31 +2156,34 @@ function accountDetail(id, view = L.accView || 'daily', anchor) {
   let html = '';
   if (view === 'daily') {
     const [y, mo] = anchor.split('-').map(Number);
-    const from = `${anchor}-01`, to = M.ymd(new Date(y, mo, 0));
+    const cb = byCycle && cycleBounds(a, anchor);
+    const from = cb ? cb.from : `${anchor}-01`, to = cb ? cb.to : M.ymd(new Date(y, mo, 0));
     const s = sumPeriod(es, from, to, open);
     const inMonth = es.filter(e => e.t.date >= from && e.t.date <= to);
     const byDay = {}; inMonth.forEach(e => (byDay[e.t.date] = byDay[e.t.date] || []).push(e));
-    html = nav(`${y} ${MONTHS[mo - 1]}`) + head(`${from.replace(/-/g, '.')} ~ ${to.slice(5).replace('-', '.')}`, s) +
+    const title = cb ? `${md(from)} – ${md(to)}${to >= t0 && from <= t0 ? ' · current' : ''}` : `${y} ${MONTHS[mo - 1]}`;
+    html = nav(title) + head(cb ? `closes ${to.replace(/-/g, '.')}${to > t0 ? ' (still open)' : ''}` : `${from.replace(/-/g, '.')} ~ ${to.slice(5).replace('-', '.')}`, s) +
       (Object.keys(byDay).sort().reverse().map(d => {
         const list = byDay[d], dt = M.parseYmd(d);
         const dep = list.filter(e => e.v > 0).reduce((x, e) => x + e.v, 0), wd = -list.filter(e => e.v < 0).reduce((x, e) => x + e.v, 0);
         return `<div class="day" style="margin-top:8px"><div class="dayhead"><span class="d">${dt.getDate()}</span><span class="wd">${WD[dt.getDay()]}</span><small class="sub2">${d.slice(0, 7)}</small><span class="sp"></span>
           <span class="amt inc">${dep ? fmt(dep) : ''}</span><span class="amt exp">${wd ? fmt(wd) : ''}</span></div>
-          ${[...list].reverse().map(e => `<div class="tx" data-tx="${e.t.id}"><div class="tx-cat">${esc(txLabel(e.t))}</div>
+          ${[...list].reverse().map(e => `<div class="tx${e.t.id === flashId ? ' flash' : ''}" data-tx="${e.t.id}"><div class="tx-cat">${esc(txLabel(e.t))}</div>
             <div class="tx-main"><div>${esc(e.t.note || '')}</div><small>${esc(e.t.type === 'transfer' ? (e.v > 0 ? 'From ' + M.accName(S, e.t.accountId) : 'To ' + M.accName(S, e.t.toAccountId)) : a.name)}</small></div>
             <div style="text-align:right"><div class="amt ${e.v > 0 ? 'inc' : 'exp'}">${fmt(Math.abs(e.v))}</div><small class="sub2">(Balance ${fmt(e.bal)})</small></div></div>`).join('')}</div>`;
-      }).join('') || '<div class="empty">No transactions this month.</div>');
+      }).join('') || `<div class="empty">No transactions in this ${cb ? 'billing cycle' : 'month'}.</div>`);
   } else if (view === 'monthly') {
     const y = +anchor;
     const s = sumPeriod(es, `${y}-01-01`, `${y}-12-31`, open);
     const rows = [];
     for (let mo = 12; mo >= 1; mo--) {
-      const from = `${y}-${String(mo).padStart(2, '0')}-01`, to = M.ymd(new Date(y, mo, 0));
+      const ym = `${y}-${String(mo).padStart(2, '0')}`, cb = byCycle && cycleBounds(a, ym);
+      const from = cb ? cb.from : `${ym}-01`, to = cb ? cb.to : M.ymd(new Date(y, mo, 0));
       if (from > t0) continue;
-      rows.push([mo, from, to, sumPeriod(es, from, to, open)]);
+      rows.push([mo, from, to, sumPeriod(es, from, to, open), ym]);
     }
-    html = nav(String(y)) + head(`${y}.01.01 ~ 12.31`, s) + `<div class="list">${rows.map(([mo, from, to, r]) => `<div class="li" data-month="${from.slice(0, 7)}">
-      <div class="grow"><b>${MONTHS[mo - 1]}</b><small>${from.slice(5).replace('-', '.')} ~ ${to.slice(5).replace('-', '.')}</small></div>
+    html = nav(String(y)) + head(byCycle ? `${y} billing cycles (by closing month)` : `${y}.01.01 ~ 12.31`, s) + `<div class="list">${rows.map(([mo, from, to, r, ym]) => `<div class="li" data-month="${ym}">
+      <div class="grow"><b>${MONTHS[mo - 1]}</b><small>${from.slice(5).replace('-', '.')} ~ ${to.slice(5).replace('-', '.')}${byCycle && to >= t0 ? ' · open' : ''}</small></div>
       <div style="text-align:right"><span class="inc">${fmt(r.dep)}</span><small>${fmt(r.net)}</small></div>
       <div style="text-align:right;min-width:92px"><span class="exp">${fmt(r.wd)}</span><small>(${fmt(r.end)})</small></div></div>`).join('')}</div>`;
   } else {
@@ -1979,6 +2197,11 @@ function accountDetail(id, view = L.accView || 'daily', anchor) {
   }
   const body = openSheet(a.name, tabs + html + `<div class="btnrow" style="padding:12px 0 0"><button class="secondary" id="addHere">+ Add transaction</button><button class="secondary" id="editAcc">✏️ Edit account</button></div>`);
   body.querySelector('#av').onclick = e => { const b = e.target.closest('button'); if (b) accountDetail(id, b.dataset.v); };
+  body.querySelector('#cy')?.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    L.cycleView = { ...(L.cycleView || {}), [id]: b.dataset.c === '1' }; saveLocal();
+    accountDetail(id, view, view === 'daily' ? undefined : anchor);
+  });
   body.querySelectorAll('[data-nav]').forEach(b => (b.onclick = () => {
     const d = +b.dataset.nav;
     if (view === 'daily') { const [y, mo] = anchor.split('-').map(Number); const n = new Date(y, mo - 1 + d, 1); accountDetail(id, view, `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`); }
@@ -1986,8 +2209,16 @@ function accountDetail(id, view = L.accView || 'daily', anchor) {
   }));
   body.querySelectorAll('[data-month]').forEach(el => (el.onclick = () => accountDetail(id, 'daily', el.dataset.month)));
   body.querySelectorAll('[data-year]').forEach(el => (el.onclick = () => accountDetail(id, 'monthly', el.dataset.year)));
-  body.querySelectorAll('[data-tx]').forEach(el => (el.onclick = () => editTxn(M.get(S, 'transactions', el.dataset.tx))));
-  body.querySelector('#addHere').onclick = () => editTxn(null, { accountId: id });
+  // After adding or editing a transaction here, come back to this account (on the period of that transaction) and show it.
+  const back = () => {
+    const tx = savedTxnId && M.get(S, 'transactions', savedTxnId); savedTxnId = null;
+    const mine = tx && tx.date <= today() && (tx.accountId === id || tx.toAccountId === id);
+    if (mine && view === 'daily') return accountDetail(id, 'daily', byCycle ? cycleMonthOf(a, tx.date) : tx.date.slice(0, 7), tx.id);
+    accountDetail(id, view, anchor);
+  };
+  body.querySelectorAll('[data-tx]').forEach(el => (el.onclick = () => editTxn(M.get(S, 'transactions', el.dataset.tx), {}, { returnTo: back })));
+  body.querySelector('#addHere').onclick = () => editTxn(null, { accountId: id }, { returnTo: back });
+  if (flashId) setTimeout(() => body.querySelector('.tx.flash')?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 60);
   body.querySelector('#editAcc').onclick = () => editAccount(a);
 }
 
@@ -2139,7 +2370,7 @@ const actions = {
   welcomeSignIn: async () => { L.clientId = DEFAULT_CLIENT_ID; saveLocal(); await doSync(true).catch(() => {}); if (L.lastSync) L.welcomeDone = true; else delete L.clientId; saveLocal(); render(); },
   welcomeFresh: () => { L.welcomeDone = true; saveLocal(); render(); },
   catPackReview: () => { catPackDone(); suggestedCategories('expense'); }, catPackDismiss: () => { catPackDone(); render(); },
-  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forceUpdate, aiScreen, askScreen, forecast: forecastScreen, budgets: budgetsScreen, taxReports: () => taxReports(), lockSettings, backupsScreen,
+  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forceUpdate, aiScreen, askScreen, forecast: forecastScreen, budgets: budgetsScreen, owedScreen: () => owedScreen(), gotPaid: el => gotPaid(el.dataset.id), taxReports: () => taxReports(), lockSettings, backupsScreen,
   payCard: el => { const id = el.dataset.id; editTxn(null, { type: 'transfer', amount: +el.dataset.amt || '', accountId: I.usualPayer(S, id) || defaultAccount(), toAccountId: id, note: 'Card payment' }); },
   addBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) editTxn(null, { ...r.template, date: el.dataset.date <= today() ? el.dataset.date : today() }); },
   skipBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) { r.dismissed = [...(r.dismissed || []), el.dataset.date].slice(-12); M.put(S, 'recurring', r); commit(); toast('Skipped this time'); } },

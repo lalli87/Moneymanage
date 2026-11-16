@@ -165,7 +165,7 @@ function runTool(S, name, a) {
     const n = Math.min(36, Math.max(1, a.months || 6)), out = [], d = new Date();
     for (let i = n - 1; i >= 0; i--) {
       const m = new Date(d.getFullYear(), d.getMonth() - i, 1), from = M.ymd(m), to = M.ymd(new Date(m.getFullYear(), m.getMonth() + 1, 0));
-      const { inc, exp } = M.sumIE(M.live(S, 'transactions').filter(t => t.date >= from && t.date <= to && t.date <= t0));
+      const { inc, exp } = M.sumIE(M.live(S, 'transactions').filter(t => t.date >= from && t.date <= to && t.date <= t0), S);
       out.push({ month: from.slice(0, 7), income: M.round2(inc), expenses: M.round2(exp), net: M.round2(inc - exp) });
     }
     return out;

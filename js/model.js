@@ -124,15 +124,16 @@ export function fillIcons(s) {
 }
 export const live = (s, c) => s[c].filter(r => !r.deleted);
 export const get = (s, c, id) => (id ? s[c].find(r => r.id === id && !r.deleted) : undefined);
+let ver = 0;   // bumps on every put/remove, so derived indexes (reimbursements) know to rebuild
 export function put(s, c, rec) {
-  rec.updatedAt = Date.now();
+  rec.updatedAt = Date.now(); ver++;
   const i = s[c].findIndex(r => r.id === rec.id);
   if (i >= 0) s[c][i] = rec; else s[c].push(rec);
   return rec;
 }
 export function remove(s, c, id) {
   const r = s[c].find(r => r.id === id);
-  if (r) { r.deleted = true; r.updatedAt = Date.now(); }
+  if (r) { r.deleted = true; r.updatedAt = Date.now(); ver++; }
 }
 
 // ---------- categories / accounts ----------
@@ -363,12 +364,81 @@ export function lastStatementDate(day, today = todayStr()) {
   return ymd(d);
 }
 
+// ---------- reimbursements & refunds ----------
+// Money back for a purchase is an income transaction with  reimburses: [{ id: <expense id>, amount }].
+// The cash really arrives (balances unchanged), but in reports the purchase shrinks to its NET amount in the
+// purchase's own month, and the linked part of the income is not counted as income. Partial and multiple
+// refunds add up. An income with  offsetCategoryId  (no purchase found) lowers that expense category instead.
+let rxCache = { arr: null, len: -1, ver: -1, v: null };
+export function reimbIndex(s) {
+  const T = s.transactions;
+  if (rxCache.arr === T && rxCache.len === T.length && rxCache.ver === ver) return rxCache.v;
+  const byId = new Map(); for (const t of T) if (!t.deleted) byId.set(t.id, t);
+  const got = {}, linked = {}, from = {};
+  for (const t of T) {
+    if (t.deleted || t.type !== 'income') continue;
+    let used = 0;
+    for (const l of t.reimburses || []) {
+      const e = byId.get(l.id); if (!e || e.type !== 'expense') continue;   // purchase deleted → counts as income again
+      const v = round2(+l.amount || 0); if (!(v > 0)) continue;
+      got[e.id] = round2((got[e.id] || 0) + v); used += v; (from[e.id] = from[e.id] || []).push({ t, amount: v });
+    }
+    if (t.offsetCategoryId) used = +t.amount;
+    if (used) linked[t.id] = round2(Math.min(used, +t.amount));
+  }
+  for (const id in got) got[id] = Math.min(got[id], +byId.get(id).amount);   // never below zero
+  return (rxCache = { arr: T, len: T.length, ver, v: { got, linked, from } }).v;
+}
+// What a transaction counts for in income/expense reports.
+export function netAmount(s, t) {
+  if (!s || t.projected) return +t.amount;
+  const { got, linked } = reimbIndex(s);
+  if (t.type === 'expense') return round2(+t.amount - (got[t.id] || 0));
+  if (t.type === 'income') return round2(+t.amount - (linked[t.id] || 0));
+  return +t.amount;
+}
+export const netFactor = (s, t) => (+t.amount ? netAmount(s, t) / +t.amount : 1);
+export const reimbursedOf = (s, id) => reimbIndex(s).got[id] || 0;
+export const reimbursementsFor = (s, id) => reimbIndex(s).from[id] || [];
+// "Someone owes me": what is still to come back on a purchase.
+export function owedLeft(s, t) {
+  if (!t.owed || t.type !== 'expense' || t.deleted) return 0;
+  return round2(Math.max(0, Math.min(+t.owed.amount || 0, +t.amount) - reimbursedOf(s, t.id)));
+}
+export const owedList = s => live(s, 'transactions').filter(t => owedLeft(s, t) > 0.004).sort((a, b) => a.date.localeCompare(b.date));
+// Purchases an incoming amount could be paying back: last N months, still with something left to pay back.
+// Best matches first — same amount (or what's still owed), same person/store in the note, most recent.
+const words = x => new Set(String(x || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2));
+export function refundCandidates(s, inc, { months = s.settings?.refundMonths || 6, query = '' } = {}) {
+  const amt = +inc.amount || 0, d = inc.date || todayStr(), from = addMonths(d, -months);
+  const mine = Object.fromEntries((inc.reimburses || []).map(l => [l.id, +l.amount || 0]));
+  const iw = words(inc.note), q = query.trim().toLowerCase();
+  const out = [];
+  for (const t of live(s, 'transactions')) {
+    if (t.type !== 'expense' || t.date < from || t.date > d) continue;
+    const left = round2(+t.amount - reimbursedOf(s, t.id) + (mine[t.id] || 0));
+    if (left <= 0.004 && !mine[t.id]) continue;
+    if (q && !`${t.note || ''} ${catLabel(s, t.categoryId)} ${t.amount} ${t.owed?.who || ''}`.toLowerCase().includes(q)) continue;
+    const owe = t.owed ? Math.min(+t.owed.amount, +t.amount) - reimbursedOf(s, t.id) + (mine[t.id] || 0) : 0;
+    let score = 0;
+    if (amt && Math.abs(left - amt) < 0.01) score += 50; else if (amt && Math.abs(+t.amount - amt) < 0.01) score += 40;
+    if (owe > 0 && Math.abs(owe - amt) < 0.01) score += 60; else if (owe > 0) score += 25;
+    const tw = words(`${t.note} ${t.owed?.who || ''}`); for (const w of iw) if (tw.has(w)) score += 15;
+    if (amt && left >= amt) score += 5;
+    score -= (Date.parse(d) - Date.parse(t.date)) / 864e5 / 30;   // a little less per month back
+    out.push({ t, left, owe: round2(Math.max(0, owe)), score, exact: Math.abs(left - amt) < 0.01 || (owe > 0 && Math.abs(owe - amt) < 0.01) });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
 // ---------- reporting ----------
-export function sumIE(txns) {
+// With the state passed in, amounts are net of refunds/reimbursements (see above).
+export function sumIE(txns, s) {
   let inc = 0, exp = 0;
   for (const t of txns) {
-    if (t.type === 'income') inc += +t.amount;
-    else if (t.type === 'expense' || t.type === 'mortgage') exp += +t.amount;
+    const v = s ? netAmount(s, t) : +t.amount;
+    if (t.type === 'income') { inc += v; if (s && t.offsetCategoryId && !t.projected) exp -= +t.amount; }
+    else if (t.type === 'expense' || t.type === 'mortgage') exp += v;
   }
   return { inc: round2(inc), exp: round2(exp) };
 }
@@ -378,14 +448,17 @@ export function categoryTotals(s, from, to, type, today = todayStr()) {
   const leaf = {}; const add = (id, a) => { const k = id || 'none'; leaf[k] = round2((leaf[k] || 0) + a); };
   for (const t of live(s, 'transactions')) {
     if (t.date < from || t.date > end) continue;
-    if (t.type === type && t.splits?.length) t.splits.forEach(x => add(x.categoryId, +x.amount));   // one bill, several categories
-    else if (t.type === type) add(t.categoryId, +t.amount);
+    const f = t.type === type ? netFactor(s, t) : 1;
+    if (t.type === type && t.splits?.length) t.splits.forEach(x => add(x.categoryId, round2(+x.amount * f)));   // one bill, several categories
+    else if (t.type === type) { const v = netAmount(s, t); if (v > 0.004 || type === 'expense') add(t.categoryId, v); }
+    else if (type === 'expense' && t.type === 'income' && t.offsetCategoryId) add(t.offsetCategoryId, -t.amount);
     else if (type === 'expense' && t.type === 'mortgage') {
       const m = get(s, 'mortgages', t.mortgageId); const sp = map[t.id];
       if (m && sp) { add(m.interestCategoryId || m.categoryId, sp.interest); add(m.principalCategoryId || m.categoryId, sp.principal); }
       else add(m?.categoryId, +t.amount);
     }
   }
+  for (const k in leaf) if (Math.abs(leaf[k]) < 0.005) delete leaf[k];
   const top = {};
   for (const id in leaf) { const tid = topCatId(s, id) || id; top[tid] = round2((top[tid] || 0) + leaf[id]); }
   return { leaf, top };

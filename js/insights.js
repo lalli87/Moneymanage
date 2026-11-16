@@ -1,11 +1,12 @@
 // Smart helpers that look at your own data (on the device) and suggest or remind.
-import { live, get, todayStr, addDays, parseYmd, ymd, round2, occurrences, balances, daysInMonth, catLabel, projected } from './model.js';
+import { live, get, todayStr, addDays, parseYmd, ymd, round2, occurrences, balances, daysInMonth, catLabel, projected, netFactor } from './model.js';
 import { merchantKey } from './receipt.js';
 import { similar, PAY_WORDS, usualPayer } from './importer.js';
 
 const days = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 86400000);
 const median = a => { const s = [...a].sort((x, y) => x - y); const n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0; };
 const kindOf = (S, accId) => get(S, 'groups', get(S, 'accounts', accId)?.groupId)?.kind || 'asset';
+export const accountKind = kindOf;
 
 export const UTILITY = /hydro|\butl\b|utilit|enbridge|enova|\bwater\b|natural gas|\bgas bill|electric|alectra|kitch-?wilmt|waterloo north|reliance|union gas|kitchener utilities|kw hydro|grandbridge|sewer/i;
 export const PHONE_NET = /koodo|fizz|rogers|\bbell\b|telus|fido|freedom mobile|virgin|chatr|public mobile|distributel|teksavvy|start\.ca|wireless|mobile|internet|cogeco|shaw|eastlink|vmedia|phone|cell/i;
@@ -247,8 +248,9 @@ export function taxReport(S, year, which, mortgageSplits) {
       const v = round2(sp.interest * f); add(exp, 'Mortgage interest', v); rows.push({ t, label: 'Mortgage interest', v, f }); continue;
     }
     if (t.type !== 'income' && t.type !== 'expense') continue;
+    const nf = netFactor(S, t); if (nf <= 0.0001) continue;   // fully paid back → not income / not a cost
     for (const x of t.splits?.length ? t.splits : [{ categoryId: t.categoryId, amount: t.amount }]) {
-      const label = catLabel(S, x.categoryId), v = round2(+x.amount * f);
+      const label = catLabel(S, x.categoryId), v = round2(+x.amount * f * nf);
       add(t.type === 'income' ? inc : exp, label, v); rows.push({ t, label, v, f });
     }
     if (t.hst) { if (t.type === 'income') hstCollected += +t.hst * f; else hstPaid += +t.hst * f; }
@@ -262,8 +264,10 @@ export function taxReport(S, year, which, mortgageSplits) {
 export function budgetStatus(S, from, to, today = todayStr()) {
   const spent = {};
   for (const t of live(S, 'transactions')) {
-    if (t.date < from || t.date > to || t.date > today || t.type !== 'expense') continue;
-    for (const x of t.splits?.length ? t.splits : [{ categoryId: t.categoryId, amount: t.amount }]) {
+    if (t.date < from || t.date > to || t.date > today) continue;
+    const lines = t.type === 'expense' ? (t.splits?.length ? t.splits : [{ categoryId: t.categoryId, amount: t.amount }]).map(x => ({ ...x, amount: +x.amount * netFactor(S, t) }))
+      : t.type === 'income' && t.offsetCategoryId ? [{ categoryId: t.offsetCategoryId, amount: -t.amount }] : [];   // refunds lower the purchase's category
+    for (const x of lines) {
       const c = get(S, 'categories', x.categoryId); const top = c ? (c.parentId || c.id) : null;
       if (top) spent[top] = round2((spent[top] || 0) + +x.amount);
     }

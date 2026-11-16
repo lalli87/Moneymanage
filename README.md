@@ -5,6 +5,9 @@ Personal money tracker that installs on **Android and Windows** from one codebas
 ## Features
 - Accounts and account groups: cash, bank, cards, loans, investments. Cards show the statement balance and the charges since the statement.
 - Income, expenses and transfers, with categories and subcategories.
+- **Money back (refunds & reimbursements).** Mark incoming money as paying back a purchase — a store refund, or a friend paying you back by cash or e-transfer. MoneyBook suggests matching purchases from the last 6 months (adjustable), supports partial refunds, several refunds on one purchase, and one payment covering several purchases. The cash still lands in the account, but reports count the purchase at its **net cost in its own month**, and the linked money is not counted as income. No matching purchase? Choose an expense category it lowers instead.
+- **Owed to me.** Tick "Someone owes me for this" on an expense, with who, how much and an optional reminder. It stays on the Owed to me list (More menu, and a banner on Transactions) until you tap **Got paid**.
+- **Credit card billing cycles.** In a card's register, switch between calendar months and billing cycles (from the day after one statement up to the next).
 - **Scheduled payments.** Repeat payments and future-dated items show on the calendar and in the "Upcoming" list. They hit your balances **only on their due date**.
 - **Reminders.**
   - An upcoming banner in the app.
