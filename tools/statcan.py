@@ -14,11 +14,18 @@ CPI_WANT = re.compile(r"^(All-items|Food|Food purchased from stores|Meat|Fresh o
                       r"Vegetables and vegetable preparations|Fresh vegetables|Other food products and non-alcoholic beverages|"
                       r"Sugar and confectionery|Edible fats and oils|Coffee and tea|Non-alcoholic beverages)$")
 
+UA = {"User-Agent": "MoneyBook-price-book/1.0 (personal finance app; https://github.com/lalli87/Moneymanage)"}
+
+def get(url, timeout=300):
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+        return r.read()
+
 def table(pid):
-    url = f"https://www150.statcan.gc.ca/n1/tbl/csv/{pid}-eng.zip"
-    req = urllib.request.Request(url, headers={"User-Agent": "MoneyBook price book (personal use)"})
-    with urllib.request.urlopen(req, timeout=300) as r:
-        z = zipfile.ZipFile(io.BytesIO(r.read()))
+    # Statistics Canada's Web Data Service (the official API) gives the current full-table download link.
+    j = json.loads(get(f"https://www150.statcan.gc.ca/t1/wds/rest/getFullTableDownloadCSV/{pid}/en", 60))
+    if j.get("status") != "SUCCESS":
+        raise RuntimeError(f"WDS: {j}")
+    z = zipfile.ZipFile(io.BytesIO(get(j["object"])))
     name = next(n for n in z.namelist() if n.endswith(".csv") and "MetaData" not in n)
     text = z.read(name).decode("utf-8-sig")
     rows = csv.DictReader(io.StringIO(text))
