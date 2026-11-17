@@ -4,6 +4,9 @@ name: Update Statistics Canada food prices
 # StatCan publishes CPI around the third week of each month; this checks weekly.
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['tools/statcan.py', '.github/workflows/statcan.yml']
   schedule:
     - cron: '17 15 * * 3'
 
@@ -25,18 +28,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898341+github-actions[bot]@users.noreply.github.com"
           git add data/statcan.json
-          git diff --cached --quiet -- data/statcan.json ':(exclude)' || true
           if git diff --cached --quiet; then echo "No change"; exit 0; fi
-          python - <<'PY'
-          import json,subprocess
-          old=subprocess.run(['git','show','HEAD:data/statcan.json'],capture_output=True,text=True).stdout
-          new=json.load(open('data/statcan.json'))
-          try:
-              o=json.loads(old); o['updated']=new['updated']
-              if o==new: subprocess.run(['git','checkout','HEAD','--','data/statcan.json']); subprocess.run(['git','reset','-q'])
-          except Exception: pass
-          PY
-          if git diff --quiet HEAD -- data/statcan.json; then echo "Only the date changed"; exit 0; fi
-          git add data/statcan.json
           git commit -m "Update Statistics Canada food prices"
-          git push
+          git pull --rebase -q && git push

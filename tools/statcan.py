@@ -59,6 +59,12 @@ res = {
     "updated": datetime.date.today().isoformat(),
     "cpi": {"months": cm, "series": pack(cm, cd)},
     "prices": {"months": pm, "series": pack(pm, pd)},
+    "cpiAllProducts": sorted(cseen),
 }
+try:   # don't commit a change that is only the date
+    old = json.load(open("data/statcan.json")); old["updated"] = res["updated"]
+    if old == res: print("No change", file=sys.stderr); sys.exit(0)
+except (FileNotFoundError, ValueError):
+    pass
 with open("data/statcan.json", "w") as f:
     json.dump(res, f, separators=(",", ":"))
