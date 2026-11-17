@@ -1,0 +1,42 @@
+name: Update Statistics Canada food prices
+
+# Refreshes data/statcan.json (food CPI and average retail prices) for the Price book.
+# StatCan publishes CPI around the third week of each month; this checks weekly.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 15 * * 3'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch and pack
+        run: python tools/statcan.py
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898341+github-actions[bot]@users.noreply.github.com"
+          git add data/statcan.json
+          git diff --cached --quiet -- data/statcan.json ':(exclude)' || true
+          if git diff --cached --quiet; then echo "No change"; exit 0; fi
+          python - <<'PY'
+          import json,subprocess
+          old=subprocess.run(['git','show','HEAD:data/statcan.json'],capture_output=True,text=True).stdout
+          new=json.load(open('data/statcan.json'))
+          try:
+              o=json.loads(old); o['updated']=new['updated']
+              if o==new: subprocess.run(['git','checkout','HEAD','--','data/statcan.json']); subprocess.run(['git','reset','-q'])
+          except Exception: pass
+          PY
+          if git diff --quiet HEAD -- data/statcan.json; then echo "Only the date changed"; exit 0; fi
+          git add data/statcan.json
+          git commit -m "Update Statistics Canada food prices"
+          git push
