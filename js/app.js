@@ -8,6 +8,7 @@ import * as Lk from './lock.js';
 import * as Cx from './crypto.js';
 import * as N from './native.js';
 import * as A from './ai.js';
+import * as PB from './prices.js';
 
 // ---------- globals ----------
 let S;                                   // synced app state
@@ -89,6 +90,7 @@ async function init() {
   N.onBack(() => { if (!$('#sheet').classList.contains('hidden')) { closeSheet(); return true; } if (tab !== 'trans') { tab = 'trans'; render(); return true; } return false; });
   if (L.clientId) Sync.loadGis().catch(() => {});
   notifyUpcoming();
+  if (N.isNative) setTimeout(() => refreshStatCanQuietly(), 8000);   // government food prices for the Price book, weekly
   // New day while app stays open → post due items.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && M.materialize(S)) commit();
@@ -407,7 +409,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.16-b';
+const APP_VERSION = '2026.11.17-a';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -421,6 +423,7 @@ function viewMore() {
     ${item('suggestions', '✨', 'Smart suggestions', 'Duplicate schedules, regular bills not yet scheduled')}
     ${item('forecast', '📈', 'Cash-flow forecast', 'Next 60 days for each bank account')}
     ${item('budgets', '🎯', 'Monthly budgets')}
+    ${item('priceBook', '🏷️', 'Price book', M.live(S, 'prices').length ? `${PB.items(S).length} grocery items · compare with Statistics Canada` : 'Grocery prices by month and year vs inflation')}
     ${item('owedScreen', '👥', 'Owed to me', (() => { const o = M.owedList(S); return o.length ? `${fmt(o.reduce((a, t) => a + M.owedLeft(S, t), 0))} from ${o.length} purchase${o.length === 1 ? '' : 's'}` : 'Purchases someone will pay you back for'; })())}
     ${A.enabled() ? item('askScreen', '💬', 'Ask MoneyBook', 'Questions about your money, answered from your data') : ''}
     ${item('taxReports', '🧾', 'Rental & business reports', 'Tax-year totals, rental share, HST')}
@@ -666,7 +669,8 @@ function editTxn(t, preset = {}, { returnTo } = {}) {
         <div><input data-k="idesc" placeholder="Item name" value="${esc(it.desc || '')}" style="margin:0;padding:6px;font-size:13px">${it.discount ? ` <span class="pill">−${fmt(it.discount)} discount</span>` : ''}${it.saving ? ` <span class="pill" style="opacity:.7">saved ${fmt(it.saving)}</span>` : ''}${it.guessed || it.noPrice ? ' <span class="pill" style="background:var(--sched);color:#fff">check price</span>' : ''}${it.how === 'store' ? ' <span class="pill">store usual</span>' : !it.categoryId ? ' <span class="pill" style="background:var(--sched);color:#fff">pick</span>' : ''}</div>
         <input data-k="iamt" type="text" inputmode="decimal" data-money autocomplete="off" value="${(+it.amount).toFixed(2)}" style="margin:0;padding:6px;font-size:13px;text-align:right">
         <button type="button" class="secondary" data-k="ix" style="padding:6px 0;margin:0" aria-label="Remove item">✕</button>
-        <select data-k="icat" style="grid-column:1/4;margin:0;padding:6px;font-size:13px">${categoryOptions('expense', it.categoryId)}</select></div>`).join('') +
+        <select data-k="icat" style="grid-column:1/4;margin:0;padding:6px;font-size:13px">${categoryOptions('expense', it.categoryId)}</select>
+        ${it.pb ? (() => { const n = PB.normalize(it.pb.qty, it.pb.unit); return n ? `<small style="grid-column:1/4;color:var(--mute)">🏷️ Price book: ${esc(it.pb.name)} · ${+n.qty.toFixed(3)} ${n.unit === 'each' ? '' : n.unit} · ${fmt(+it.amount / n.qty)}${PB.UNIT_LABEL[n.unit]}${n.unit === 'kg' ? ` (${fmt(PB.perLb(+it.amount / n.qty))}/lb)` : ''}</small>` : ''; })() : ''}</div>`).join('') +
       `<div style="display:grid;grid-template-columns:1fr 84px 34px;gap:6px;align-items:center;padding:6px 0"><span style="font-size:13px">Tax (HST/GST on the receipt)</span>
         <input data-k="itax" type="text" inputmode="decimal" data-money autocomplete="off" value="${(+itemTax).toFixed(2)}" style="margin:0;padding:6px;font-size:13px;text-align:right"><span></span></div>
       <div class="hint" style="margin-top:2px">Items ${fmt(sum)} + tax ${fmt(itemTax)} = <b>${fmt(M.round2(sum + itemTax))}</b> · amount ${fmt(amt())}
@@ -820,7 +824,7 @@ function editTxn(t, preset = {}, { returnTo } = {}) {
       if (lines.length > 1) { rec.splits = lines.map(x => ({ categoryId: x.categoryId, amount: M.round2(+x.amount) })).sort((a, b) => b.amount - a.amount); rec.categoryId = rec.splits[0].categoryId; }
       else if (lines.length === 1) rec.categoryId = lines[0].categoryId;
       (items || []).filter(i => i.changed && i.categoryId && i.desc).forEach(i => R.learnItem(S, i.desc, i.categoryId));
-      if (items?.length) { rec.items = items.map(i => ({ desc: i.desc || '', amount: M.round2(+i.amount || 0), categoryId: i.categoryId || '', ...(i.discount ? { discount: i.discount } : {}), ...(i.saving ? { saving: i.saving } : {}) })); rec.itemTax = itemTax || undefined; }
+      if (items?.length) { rec.items = items.map(i => ({ desc: i.desc || '', amount: M.round2(+i.amount || 0), categoryId: i.categoryId || '', ...(i.discount ? { discount: i.discount } : {}), ...(i.saving ? { saving: i.saving } : {}), ...(i.pb ? { pb: i.pb } : {}) })); rec.itemTax = itemTax || undefined; }
     }
     rec.mortgageId = t.type === 'mortgage' ? f.mortgageId.value : undefined;
     rec.prepayment = t.type === 'mortgage' ? f.prepayment.checked : undefined;
@@ -876,7 +880,7 @@ function editTxn(t, preset = {}, { returnTo } = {}) {
       M.put(S, 'recurring', r);
       M.materialize(S);
       toast('Repeat payment created');
-    } else { M.put(S, 'transactions', rec); savedTxnId = rec.id; toast(rec.date > today() ? 'Scheduled ⏰' : rec.reimburses ? 'Saved — linked to the purchase ↩️' : 'Saved'); }
+    } else { M.put(S, 'transactions', rec); savedTxnId = rec.id; if (rec.items || !isNew) { PB.syncFromTxn(S, rec); refreshStatCanQuietly(); } toast(rec.date > today() ? 'Scheduled ⏰' : rec.reimburses ? 'Saved — linked to the purchase ↩️' : 'Saved'); }
     closeSheet(); commit();
   };
   sheetReturn = returnTo || null;
@@ -1790,6 +1794,149 @@ function catPackBanner() {
   return `<div class="banner" style="display:flex;gap:8px;align-items:center"><span style="flex:1">🗂️ <b>New categories available</b> — subscriptions, medicines, dry fruits, kids' clothes, car maintenance and more. Pick the ones you want.</span><button class="secondary" data-act="catPackReview" style="padding:6px 12px">Review</button><button class="secondary" data-act="catPackDismiss" style="padding:6px 10px" aria-label="Dismiss">✕</button></div>`;
 }
 const catPackDone = () => { S.settings = { ...S.settings, catPack: 3, updatedAt: Date.now() }; commit(); };
+// ---------- price book ----------
+const pc = v => v == null ? '—' : `${v > 0.05 ? '▲' : v < -0.05 ? '▼' : '■'} ${v > 0 ? '+' : ''}${v.toFixed(1)}%`;
+const pcCls = v => v == null ? '' : v > 0.05 ? 'exp' : v < -0.05 ? 'inc' : '';
+const unitP = (v, unit) => `${fmt(v)}${PB.UNIT_LABEL[unit]}`;
+const monthName = m => `${MONTHS[+m.slice(5, 7) - 1]} ${m.slice(0, 4)}`;
+let scBusy = false;
+// Government data: the Android app downloads it (the phone's own connection); everything else gets it through sync.
+async function refreshStatCanQuietly(force = false) {
+  if (scBusy) return; scBusy = true;
+  try { const before = S.statcan?.fetchedAt; await PB.refreshStatCan(S, N.httpJson, { force }); if (S.statcan?.fetchedAt !== before) { await commit(); return 'ok'; } return 'same'; }
+  catch (e) { return e.message || String(e); }
+  finally { scBusy = false; }
+}
+// A small line chart: your monthly price (solid) and the government average (dashed), with month ticks.
+function priceChart(rows, gov) {
+  const ms = [...new Set([...rows.map(r => r.k), ...Object.keys(gov || {})])].sort();
+  const from = rows[0]?.k || ms[0]; const months = ms.filter(m => m >= (from < ms[ms.length - 1] ? (() => { const d = new Date(+from.slice(0, 4), +from.slice(5) - 4, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })() : from));
+  if (months.length < 2) return '';
+  const mine = Object.fromEntries(rows.map(r => [r.k, r.avg])), vals = months.flatMap(m => [mine[m], gov?.[m]]).filter(v => v != null);
+  const lo = Math.min(...vals) * 0.95, hi = Math.max(...vals) * 1.05, W = 340, H = 140, X = i => 34 + i * (W - 44) / (months.length - 1), Y = v => H - 18 - (v - lo) / (hi - lo || 1) * (H - 30);
+  const line = (src, dash) => { let d = '', pen = false; months.forEach((m, i) => { const v = src[m]; if (v == null) { pen = false; return; } d += `${pen ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)} `; pen = true; });
+    return d ? `<path d="${d}" fill="none" stroke="${dash ? 'var(--mute)' : 'var(--accent)'}" stroke-width="2" ${dash ? 'stroke-dasharray="5 4"' : ''}/>` : ''; };
+  const dots = months.map((m, i) => mine[m] != null ? `<circle cx="${X(i).toFixed(1)}" cy="${Y(mine[m]).toFixed(1)}" r="3" fill="var(--accent)"/>` : '').join('');
+  const step = Math.ceil(months.length / 6), ticks = months.map((m, i) => i % step === 0 || i === months.length - 1 ? `<text x="${X(i)}" y="${H - 3}" font-size="9" text-anchor="middle" fill="var(--mute)">${MONTHS[+m.slice(5) - 1]}${m.endsWith('-01') || i === 0 ? ' ' + m.slice(2, 4) : ''}</text>` : '').join('');
+  const yl = [lo, (lo + hi) / 2, hi].map(v => `<text x="2" y="${Y(v) + 3}" font-size="9" fill="var(--mute)">${v >= 10 ? v.toFixed(0) : v.toFixed(2)}</text>`).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:520px" role="img" aria-label="Price by month">${yl}${ticks}${line(gov || {}, true)}${line(mine, false)}${dots}</svg>
+    <div class="hint" style="margin:2px 0 8px">● solid: what you paid (monthly average)${gov ? ' · - - dashed: Statistics Canada average' : ''}</div>`;
+}
+function priceBook(tab = L.pbTab || 'items', opts = {}) {
+  PB.useStatCan(S); L.pbTab = tab; saveLocal();
+  const its = PB.items(S), sc = PB.statcan(), lm = PB.latestMonth(), t0 = today();
+  const scLine = sc ? `🇨🇦 Statistics Canada data up to <b>${lm ? monthName(lm) : '—'}</b> · checked ${new Date(sc.fetchedAt).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}`
+    : N.isNative ? '🇨🇦 Government data not downloaded yet' : '🇨🇦 Government data comes from the Android app — open the Price book there once and it syncs here';
+  let h = `<div class="hint" style="display:flex;gap:8px;align-items:center;margin-top:0"><span style="flex:1">${scLine}</span>${N.isNative || sc ? `<button class="secondary" id="scr" style="padding:4px 10px;margin:0">${scBusy ? '…' : 'Refresh'}</button>` : ''}</div>
+    <div class="seg" id="pbt"><button data-t="items" class="${tab === 'items' ? 'on' : ''}">🏷️ Items</button><button data-t="infl" class="${tab === 'infl' ? 'on' : ''}">📈 vs inflation</button></div>`;
+  const old = PB.untidied(S);
+  const tidyBtn = old.length && A.enabled() ? `<div class="banner">🧾 ${old.length} older receipt${old.length > 1 ? 's have' : ' has'} an item list but no price-book details. <button class="secondary" id="tidy" style="padding:4px 10px;margin-top:6px">Add them with AI</button><br><small class="sub2">Sizes are usually missing on older ones, so most become “each”. About $0.001 per receipt.</small></div>` : '';
+  if (!its.length) {
+    h += `<div class="empty" style="text-align:left">No grocery prices yet.<br><br>Scan a grocery receipt with the ✨ AI reader (More › AI assistant) — every food item is saved here with its size and price per kg, litre or each, by month and year.</div>` + tidyBtn;
+  } else if (tab === 'items') {
+    const q = (opts.q || '').toLowerCase(), g = opts.g || '';
+    const groups = [...new Set(its.map(i => i.group))];
+    const y = +t0.slice(0, 4);
+    const rows = its.filter(i => (!g || i.group === g) && (!q || i.name.toLowerCase().includes(q))).map(i => {
+      const yr = PB.byPeriod(i.rows, 4), cur = yr.find(r => r.k === String(y)) || yr[yr.length - 1], prev = yr.find(r => +r.k === +cur.k - 1);
+      return { i, ch: prev ? PB.pct(cur.avg, prev.avg) : null, cur };
+    }).sort((a, b) => b.i.rows.length - a.i.rows.length || a.i.name.localeCompare(b.i.name));
+    h += `<input id="pbq" type="search" placeholder="Search items" value="${esc(opts.q || '')}" autocomplete="off">
+      <div class="chips" id="pbg" style="display:flex;gap:6px;flex-wrap:wrap;margin:-4px 0 8px"><button class="secondary ${g ? '' : 'on'}" data-g="" style="padding:4px 10px;margin:0">All</button>${groups.map(k => `<button class="secondary ${g === k ? 'on' : ''}" data-g="${k}" style="padding:4px 10px;margin:0">${PB.GROUPS[k]?.emoji || ''} ${PB.GROUPS[k]?.label || k}</button>`).join('')}</div>
+      <div class="list">${rows.map(({ i, ch, cur }) => `<div class="li" data-pi="${esc(i.key)}|${i.unit}"><div class="grow">${PB.GROUPS[i.group]?.emoji || ''} ${esc(i.name)}
+        <small>${unitP(i.last.unitPrice, i.unit)}${i.unit === 'kg' ? ` · ${fmt(PB.perLb(i.last.unitPrice))}/lb` : ''} · ${esc(i.last.store)} ${i.last.date.slice(5)} · ${i.rows.length}×</small></div>
+        <div style="text-align:right"><b class="${pcCls(ch)}" style="font-size:13px">${ch == null ? '' : pc(ch)}</b><small class="sub2" style="display:block">${ch == null ? `avg ${cur.k}` : `${cur.k} vs ${+cur.k - 1}`}</small></div></div>`).join('') || '<div class="empty">No match.</div>'}</div>` + tidyBtn;
+  } else {
+    // your basket vs the official food-from-stores inflation, by year and by group
+    const years = [...new Set(M.live(S, 'prices').map(p => +p.date.slice(0, 4)))].sort();
+    const y = opts.y || years[years.length - 1];
+    const lastM = Math.min(y === +t0.slice(0, 4) ? +t0.slice(5, 7) : 12, lm && +lm.slice(0, 4) === y ? +lm.slice(5, 7) : 12);
+    const months = Array.from({ length: lastM }, (_, i) => i + 1);
+    const mine = PB.basketChange(S, y, { months }), gov = PB.cpiChange(PB.ALL_FOOD_CPI, y, months);
+    const span = lastM === 12 ? `${y} vs ${y - 1}` : `Jan–${MONTHS[lastM - 1]} ${y} vs same months ${y - 1}`;
+    const diff = mine.change != null && gov ? mine.change - gov.change : null;
+    h += `<div class="seg" id="pby" style="margin-top:-4px">${years.slice(-4).map(v => `<button data-y="${v}" class="${v === y ? 'on' : ''}">${v}</button>`).join('')}</div>
+      <div class="cards">
+        <div class="card"><small>Your grocery prices</small><b class="${pcCls(mine.change)}" style="font-size:22px">${pc(mine.change)}</b><small>${mine.items.length} item${mine.items.length === 1 ? '' : 's'} bought in both years</small></div>
+        <div class="card"><small>Food from stores (CPI${gov ? ', ' + gov.geo : ''})</small><b class="${pcCls(gov?.change)}" style="font-size:22px">${pc(gov?.change)}</b><small>${gov ? `official, ${gov.months} month${gov.months > 1 ? 's' : ''}` : sc ? 'not published yet' : 'tap Refresh'}</small></div>
+      </div>
+      <div class="hint">${span}. ${diff == null ? (mine.change == null ? `Your figure needs the same items bought in ${y - 1} and ${y} — it fills in as receipts build up.` : '') :
+        Math.abs(diff) < 1 ? 'Your prices are moving <b>in line</b> with official food inflation.' : `Your prices rose <b>${Math.abs(diff).toFixed(1)} points ${diff > 0 ? 'faster' : 'slower'}</b> than official food inflation.`}
+        Expect some gap: the CPI tracks the same products in many stores, while yours reflects where you shop, sales and package sizes.</div>
+      <div class="section-title">By group</div>
+      <div class="tablewrap"><table><tr><th style="text-align:left">Group</th><th>You</th><th>CPI</th><th>Items</th></tr>${Object.entries(PB.GROUPS).map(([k, gr]) => {
+        const a = PB.basketChange(S, y, { group: k, months }), b = PB.cpiChange(gr.cpi, y, months);
+        if (a.change == null && !its.some(i => i.group === k)) return '';
+        return `<tr><td style="text-align:left">${gr.emoji} ${gr.label}</td><td class="${pcCls(a.change)}">${pc(a.change)}</td><td class="${pcCls(b?.change)}">${pc(b?.change)}</td><td>${a.items.length}</td></tr>`; }).join('')}</table></div>
+      <div class="section-title">Month by month (each month vs a year earlier)</div>
+      <div class="tablewrap"><table><tr><th style="text-align:left">Month</th><th>You</th><th>CPI</th></tr>${Array.from({ length: 12 }, (_, k) => { const d = new Date(+t0.slice(0, 4), +t0.slice(5, 7) - 1 - k, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })
+        .map(m => { const a = PB.monthlyYoY(S, m), b = PB.cpiYoYMonth(PB.ALL_FOOD_CPI, m); return a || b != null ? `<tr><td style="text-align:left">${monthName(m)}</td><td class="${pcCls(a?.change)}">${a ? pc(a.change) : '—'}</td><td class="${pcCls(b)}">${pc(b)}</td></tr>` : ''; }).join('') || '<tr><td colspan="3">Not enough data yet.</td></tr>'}</table></div>
+      ${mine.items.length ? `<div class="section-title">Biggest items in your figure</div><div class="list">${mine.items.slice(0, 12).map(x => `<div class="li" data-pi="${esc(x.it.key)}|${x.it.unit}"><div class="grow">${esc(x.it.name)}<small>${fmt(x.w)} spent in ${y}</small></div><b class="${pcCls(x.ch)}">${pc(x.ch)}</b></div>`).join('')}</div>` : ''}
+      <div class="hint">Your figure: each item's average price per kg/L/each in ${y} vs ${y - 1}, weighted by what you spent on it. Source: Statistics Canada, table 18-10-0004-01 (Consumer Price Index, Ontario).</div>`;
+  }
+  const body = openSheet('Price book', h);
+  body.querySelector('#pbt').onclick = e => { const b = e.target.closest('button'); if (b) priceBook(b.dataset.t); };
+  body.querySelector('#pby')?.addEventListener('click', e => { const b = e.target.closest('button'); if (b) priceBook('infl', { y: +b.dataset.y }); });
+  const q = body.querySelector('#pbq'); if (q) q.oninput = () => { const pos = q.selectionStart; priceBook('items', { ...opts, q: q.value }); const q2 = $('#sheet #pbq'); q2.focus(); q2.setSelectionRange(pos, pos); };
+  body.querySelector('#pbg')?.addEventListener('click', e => { const b = e.target.closest('[data-g]'); if (b) priceBook('items', { ...opts, g: b.dataset.g }); });
+  body.querySelectorAll('[data-pi]').forEach(el => (el.onclick = () => { const [k, u] = el.dataset.pi.split('|'); priceItem(k, u, () => priceBook(tab, opts)); }));
+  body.querySelector('#scr')?.addEventListener('click', async e => {
+    if (!N.isNative) return toast('Statistics Canada only answers the Android app — refresh there and it syncs here', 4000);
+    e.target.textContent = '…'; const r = await refreshStatCanQuietly(true);
+    toast(r === 'ok' || r === 'same' ? 'Statistics Canada data is up to date' : `Couldn’t reach Statistics Canada: ${r}`, 4000); priceBook(tab, opts);
+  });
+  body.querySelector('#tidy')?.addEventListener('click', async e => {
+    e.target.disabled = true; let done = 0;
+    try {
+      for (let i = 0; i < old.length; i += 8) {
+        const batch = old.slice(i, i + 8), lines = [];
+        batch.forEach(t => t.items.forEach((it, k) => lines.push({ t, k, desc: it.desc, amount: it.amount, store: t.note })));
+        e.target.textContent = `Reading ${Math.min(i + 8, old.length)} of ${old.length}…`;
+        const res = await A.tidyItems(lines);
+        for (const r of res) { const l = lines[r.i]; if (l && r.pb) l.t.items[l.k] = { ...l.t.items[l.k], pb: r.pb }; }
+        for (const t of batch) { if (t.items.some(x => x.pb)) { M.put(S, 'transactions', t); PB.syncFromTxn(S, t); done++; } }
+      }
+      toast(`Added items from ${done} receipt${done === 1 ? '' : 's'}`);
+    } catch (err) { toast('AI: ' + err.message, 4000); }
+    await commit(); refreshStatCanQuietly(); priceBook(tab, opts);
+  });
+  if (N.isNative && (!sc || Date.now() - sc.fetchedAt > 6 * 864e5)) refreshStatCanQuietly().then(r => { if (r === 'ok' && $('#sheet h2')?.textContent.startsWith('Price book')) priceBook(tab, opts); });
+}
+function priceItem(key, unit, back) {
+  PB.useStatCan(S);
+  const it = PB.items(S).find(i => i.key === key && i.unit === unit); if (!it) return back?.();
+  const mo = PB.byPeriod(it.rows, 7), yr = PB.byPeriod(it.rows, 4);
+  const gov = it.statcan ? PB.govPrices(it.statcan, unit) : null;
+  const lb = unit === 'kg';
+  const body = openSheet(`${PB.GROUPS[it.group]?.emoji || ''} ${it.name}`, `
+    <div class="cards">
+      <div class="card"><small>Last paid</small><b>${unitP(it.last.unitPrice, unit)}</b><small>${lb ? `${fmt(PB.perLb(it.last.unitPrice))}/lb · ` : ''}${esc(it.last.store)} ${it.last.date}</small></div>
+      <div class="card"><small>Lowest</small><b class="inc">${unitP(Math.min(...it.rows.map(p => p.unitPrice)), unit)}</b><small>${(() => { const p = it.rows.reduce((a, b) => (b.unitPrice < a.unitPrice ? b : a)); return `${esc(p.store)} ${p.date}`; })()}</small></div>
+    </div>
+    ${priceChart(mo, gov?.by)}
+    ${gov ? `<div class="hint" style="margin-top:0">Compared with Statistics Canada “${esc(gov.name)}” (${gov.geo} average), shown ${PB.UNIT_LABEL[unit].trim()}.</div>` : `<div class="hint" style="margin-top:0">${PB.productNames().length ? 'Not matched to a Statistics Canada product.' : ''}</div>`}
+    <div class="section-title">By year</div>
+    <div class="tablewrap"><table><tr><th style="text-align:left">Year</th><th>Average</th>${lb ? '<th>/lb</th>' : ''}<th>Low</th><th>High</th><th>Change</th></tr>${[...yr].reverse().map((r, i, a) => { const p = a[i + 1]; const ch = p ? PB.pct(r.avg, p.avg) : null;
+      return `<tr><td style="text-align:left">${r.k}</td><td>${fmt(r.avg)}</td>${lb ? `<td>${fmt(PB.perLb(r.avg))}</td>` : ''}<td>${fmt(r.min)}</td><td>${fmt(r.max)}</td><td class="${pcCls(ch)}">${pc(ch)}</td></tr>`; }).join('')}</table></div>
+    <div class="section-title">By month</div>
+    <div class="tablewrap"><table><tr><th style="text-align:left">Month</th><th>You paid</th>${gov ? `<th>${gov.geo} avg</th><th>Diff</th>` : ''}<th>Buys</th><th style="text-align:left">Stores</th></tr>${[...mo].reverse().map(r => { const g = gov?.by[r.k];
+      return `<tr><td style="text-align:left">${monthName(r.k)}</td><td>${fmt(r.avg)}</td>${gov ? `<td>${g != null ? fmt(g) : '—'}</td><td class="${pcCls(g != null ? PB.pct(r.avg, g) : null)}">${g != null ? pc(PB.pct(r.avg, g)) : ''}</td>` : ''}<td>${r.n}</td><td style="text-align:left;white-space:nowrap">${esc(r.stores.join(', '))}</td></tr>`; }).join('')}</table></div>
+    <div class="section-title">Purchases</div>
+    <div class="list">${[...it.rows].reverse().map(p => `<div class="li" data-ptx="${p.txnId}"><div class="grow">${p.date} · ${esc(p.store)}<small>${+p.qty.toFixed(3)} ${unit === 'each' ? '×' : unit} for ${fmt(p.paid)}</small></div><b>${unitP(p.unitPrice, unit)}</b></div>`).join('')}</div>
+    <label>Name (rename, or type another item's name to merge them)<input id="pin" value="${esc(it.name)}" list="pinl" autocomplete="off"><datalist id="pinl">${PB.items(S).filter(x => x.key !== key && x.unit === unit).map(x => `<option value="${esc(x.name)}">`).join('')}</datalist></label>
+    ${PB.productNames().length ? `<label>Statistics Canada product to compare with<select id="pis"><option value="">— none —</option>${PB.productNames().filter(n => PB.productUnit(n).unit === unit).map(n => `<option ${n === it.statcan ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label>` : ''}
+    <button class="primary" id="pisave" style="width:100%">Save</button>`);
+  sheetReturn = back || null;
+  body.querySelectorAll('[data-ptx]').forEach(el => (el.onclick = () => { const t = M.get(S, 'transactions', el.dataset.ptx); if (t) editTxn(t, {}, { returnTo: () => priceItem(key, unit, back) }); else toast('That expense was deleted — its price is kept here'); }));
+  body.querySelector('#pisave').onclick = async () => {
+    const nn = body.querySelector('#pin').value.trim(), st = body.querySelector('#pis')?.value;
+    let k = key;
+    if (nn && nn !== it.name) { PB.renameItem(S, key, nn); k = PB.keyOf(nn); }
+    if (st !== undefined && st !== (it.statcan || '')) for (const p of M.live(S, 'prices')) if (p.key === k && p.unit === unit) M.put(S, 'prices', { ...p, statcan: st || undefined });
+    await commit(); toast('Saved'); if (st) refreshStatCanQuietly().then(() => priceItem(k, unit, back)); else priceItem(k, unit, back);
+  };
+}
+
 // ---------- owed to me ----------
 function owedBanner() {
   const o = M.owedList(S); if (!o.length || o.length === owedDue().length) return '';   // all already under "Needs attention"
@@ -2420,7 +2567,7 @@ const actions = {
   welcomeSignIn: async () => { L.clientId = DEFAULT_CLIENT_ID; saveLocal(); await doSync(true).catch(() => {}); if (L.lastSync) L.welcomeDone = true; else delete L.clientId; saveLocal(); render(); },
   welcomeFresh: () => { L.welcomeDone = true; saveLocal(); render(); },
   catPackReview: () => { catPackDone(); suggestedCategories('expense'); }, catPackDismiss: () => { catPackDone(); render(); },
-  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forceUpdate, aiScreen, askScreen, forecast: forecastScreen, budgets: budgetsScreen, owedScreen: () => owedScreen(), gotPaid: el => gotPaid(el.dataset.id), taxReports: () => taxReports(), lockSettings, backupsScreen,
+  receiptRules, syncScreen, settings, importStatement, dupScan, suggestions, forceUpdate, aiScreen, askScreen, forecast: forecastScreen, budgets: budgetsScreen, priceBook: () => priceBook(), owedScreen: () => owedScreen(), gotPaid: el => gotPaid(el.dataset.id), taxReports: () => taxReports(), lockSettings, backupsScreen,
   payCard: el => { const id = el.dataset.id; editTxn(null, { type: 'transfer', amount: +el.dataset.amt || '', accountId: I.usualPayer(S, id) || defaultAccount(), toAccountId: id, note: 'Card payment' }); },
   addBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) editTxn(null, { ...r.template, date: el.dataset.date <= today() ? el.dataset.date : today() }); },
   skipBill: el => { const r = M.get(S, 'recurring', el.dataset.id); if (r) { r.dismissed = [...(r.dismissed || []), el.dataset.date].slice(-12); M.put(S, 'recurring', r); commit(); toast('Skipped this time'); } },

@@ -1,6 +1,6 @@
 // Phone features when MoneyBook runs as the Android app (Capacitor). In a browser every function here
 // falls back to the web way of doing things, so the website keeps working unchanged.
-import { Capacitor, registerPlugin } from '../vendor/capacitor/core.js';
+import { Capacitor, registerPlugin, CapacitorHttp } from '../vendor/capacitor/core.js';
 
 export const isNative = Capacitor.isNativePlatform();
 const SocialLogin = registerPlugin('SocialLogin');
@@ -93,4 +93,17 @@ export function watchNight(fn) {
   if (!isNative) return;
   SystemTheme.get().then(r => fn(!!r.night)).catch(() => {});
   SystemTheme.addListener('change', r => fn(!!r.night)).catch?.(() => {});
+}
+
+// JSON over HTTP. The Android app uses the phone's native HTTP (no browser cross-site limits), so it can talk to
+// services like Statistics Canada's Web Data Service; a browser uses fetch and may be refused by them.
+export async function httpJson(url, body) {
+  if (isNative) {
+    const r = await CapacitorHttp.request({ url, method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, ...(body ? { data: body } : {}), connectTimeout: 30000, readTimeout: 60000 });
+    if (r.status < 200 || r.status >= 300) throw new Error(`HTTP ${r.status}`);
+    return typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+  }
+  const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
 }

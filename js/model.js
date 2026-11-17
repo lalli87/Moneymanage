@@ -2,7 +2,7 @@
 // Rule of the app: balances only include transactions dated <= today.
 // Anything dated in the future (one-off or recurring) is "scheduled" and only shown.
 
-export const COLLECTIONS = ['groups', 'accounts', 'categories', 'transactions', 'recurring', 'mortgages', 'rules'];
+export const COLLECTIONS = ['groups', 'accounts', 'categories', 'transactions', 'recurring', 'mortgages', 'rules', 'prices'];
 
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const z = n => String(n).padStart(2, '0');
@@ -597,5 +597,6 @@ export function merge(a, b) {
     out[c] = [...map.values()];
   }
   out.settings = (a.settings?.updatedAt || 0) >= (b.settings?.updatedAt || 0) ? a.settings : b.settings;
+  if (a.statcan || b.statcan) out.statcan = (a.statcan?.fetchedAt || 0) >= (b.statcan?.fetchedAt || 0) ? a.statcan : b.statcan;   // government food prices, newest copy
   return out;
 }

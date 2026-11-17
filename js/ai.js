@@ -3,6 +3,7 @@
 // Every answer with numbers is worked out by the app's own functions (tools), not guessed by the AI.
 import * as M from './model.js';
 import * as X from './insights.js';
+import * as PB from './prices.js';
 
 export const MODEL = 'claude-haiku-5-5';
 const PRICE = { in: 0.10 / 1e6, out: 0.50 / 1e6 };   // USD per token (Haiku 5.5, prompts up to 100K)
@@ -79,8 +80,14 @@ const RECEIPT_TOOL = {
             amount: { type: 'number', description: 'What was actually paid for this item AFTER any discount on it' },
             discount: { type: 'number', description: 'Discount taken off this item, 0 if none. If the receipt prints the already-discounted price with a "saving/you saved" note, the amount is that printed price and discount is 0.' },
             categoryId: { type: 'string', description: 'Best matching expense category id from the list' },
+            food: { type: 'boolean', description: 'true for food and grocery items (produce, meat, dairy, bakery, pantry, drinks, frozen); false for everything else (household, toiletries, clothes, deposits, bags, gift cards)' },
+            name: { type: 'string', description: 'Food only: generic product name without brand, store codes or sizes, so the same product matches across stores and visits — e.g. "Bananas", "Milk 2%", "Eggs, large", "Chicken thighs, boneless", "Bread, whole wheat", "Basmati rice"' },
+            qty: { type: 'number', description: 'Food only: total quantity bought, in "unit". Weighed: the weight (0.455). Package with printed size: size × count (2 × 4 L milk → 8). Eggs: number of eggs (1 dozen → 12). Unknown size: the count of packages.' },
+            unit: { type: 'string', enum: ['kg', 'g', 'lb', 'L', 'ml', 'each'], description: 'Food only: unit of qty. Use "each" only for counted items (eggs, avocados, a head of lettuce) or when the size is not printed.' },
+            group: { type: 'string', enum: ['fruit', 'veg', 'meat', 'fish', 'dairy', 'bakery', 'pantry', 'drinks', 'frozen'], description: 'Food only: fruit/veg = fresh produce; dairy includes eggs; bakery includes cereal, pasta, rice, flour; pantry = everything else shelf-stable' },
+            statcan: { type: 'string', description: 'Food only: the exact name from the Statistics Canada product list when it is the same kind of product (size may differ), else empty' },
           },
-          required: ['desc', 'amount', 'categoryId'],
+          required: ['desc', 'amount', 'categoryId', 'food'],
         },
       },
     },
@@ -89,6 +96,7 @@ const RECEIPT_TOOL = {
 };
 export async function readReceipt(S, { file, text }) {
   const cats = catList(S).filter(c => c.type === 'expense');
+  PB.useStatCan(S); const sc = PB.productNames();
   const learned = (S.rules || []).filter(r => r.kind === 'item' && r.categoryId).slice(-60).map(r => `${r.merchant || r.key} → ${r.categoryId}`);
   const content = [];
   if (file) content.push(await imagePart(file));
@@ -98,13 +106,39 @@ export async function readReceipt(S, { file, text }) {
     `Weighed items: the price on the weight line belongs to the item above. Pick each item's category from this list (id: name):\n` +
     cats.map(c => `${c.id}: ${c.name}`).join('\n') +
     (learned.length ? `\nThe owner's own past choices (item → category id), follow these:\n${learned.join('\n')}` : '') +
+    `\nFor food items also give name, qty, unit and group (for the owner's price book), reading weights and sizes from the receipt line or the line under it.` +
+    (sc.length ? `\nStatistics Canada product list (for "statcan"):\n${sc.join('\n')}` : '') +
     (text ? `\n\nReceipt text:\n${text.slice(0, 12000)}` : '') });
   const j = await call({ tools: [RECEIPT_TOOL], tool_choice: { type: 'tool', name: 'record_receipt' }, messages: [{ role: 'user', content }] });
   const r = j.content.find(b => b.type === 'tool_use')?.input;
   if (!r?.items) throw new Error('Claude could not read this receipt.');
   const ids = new Set(cats.map(c => c.id));
-  r.items = r.items.filter(i => +i.amount).map(i => ({ desc: i.desc, amount: M.round2(+i.amount), ...(+i.discount ? { discount: M.round2(+i.discount) } : {}), categoryId: ids.has(i.categoryId) ? i.categoryId : '', how: 'ai' }));
+  const scSet = new Set(sc);
+  r.items = r.items.filter(i => +i.amount).map(i => ({ desc: i.desc, amount: M.round2(+i.amount), ...(+i.discount ? { discount: M.round2(+i.discount) } : {}), categoryId: ids.has(i.categoryId) ? i.categoryId : '', how: 'ai',
+    ...(i.food && i.name ? { pb: { name: String(i.name).trim(), qty: +i.qty || 1, unit: i.unit || 'each', group: PB.GROUPS[i.group] ? i.group : 'pantry', ...(scSet.has(i.statcan) ? { statcan: i.statcan } : {}) } } : {}) }));
   return r;
+}
+
+// ---------- Price book: tidy item lists saved before it existed (text only, no photo) ----------
+const TIDY_TOOL = {
+  name: 'price_book_items',
+  description: 'For each receipt line, say whether it is food and give its price-book fields.',
+  input_schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: {
+    i: { type: 'integer', description: 'Index of the line as given' }, food: { type: 'boolean' },
+    name: RECEIPT_TOOL.input_schema.properties.items.items.properties.name, qty: RECEIPT_TOOL.input_schema.properties.items.items.properties.qty,
+    unit: RECEIPT_TOOL.input_schema.properties.items.items.properties.unit, group: RECEIPT_TOOL.input_schema.properties.items.items.properties.group,
+    statcan: RECEIPT_TOOL.input_schema.properties.items.items.properties.statcan,
+  }, required: ['i', 'food'] } } }, required: ['items'] },
+};
+export async function tidyItems(lines) {   // lines: [{ desc, amount, store }]
+  const sc = PB.productNames(), scSet = new Set(sc);
+  const j = await call({ max_tokens: 4000, tools: [TIDY_TOOL], tool_choice: { type: 'tool', name: 'price_book_items' }, messages: [{ role: 'user', content:
+    `These are lines from the owner's grocery receipts (index | store | line | paid). Sizes are often missing; when no size is in the text, use qty = 1 and unit "each" ` +
+    `unless the product is normally sold by weight and the paid amount makes the weight obvious (then still use "each" — never guess a weight).\n` +
+    lines.map((l, i) => `${i} | ${l.store || ''} | ${l.desc} | ${(+l.amount).toFixed(2)}`).join('\n') +
+    (sc.length ? `\n\nStatistics Canada product list (for "statcan"):\n${sc.join('\n')}` : '') + `\n\nCall price_book_items with one entry per line.` }] });
+  const out = j.content.find(b => b.type === 'tool_use')?.input?.items || [];
+  return out.map(x => ({ i: x.i, pb: x.food && x.name ? { name: String(x.name).trim(), qty: +x.qty || 1, unit: x.unit || 'each', group: PB.GROUPS[x.group] ? x.group : 'pantry', ...(scSet.has(x.statcan) ? { statcan: x.statcan } : {}) } : null }));
 }
 
 // ---------- "type it": a sentence becomes a transaction ----------
