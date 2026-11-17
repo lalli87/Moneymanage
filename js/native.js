@@ -95,15 +95,22 @@ export function watchNight(fn) {
   SystemTheme.addListener('change', r => fn(!!r.night)).catch?.(() => {});
 }
 
-// JSON over HTTP. The Android app uses the phone's native HTTP (no browser cross-site limits), so it can talk to
-// services like Statistics Canada's Web Data Service; a browser uses fetch and may be refused by them.
+// JSON over HTTP. Tries the normal browser request first (works on the website and in the app wherever the
+// service allows web pages to call it); in the Android app, falls back to the phone's native HTTP.
 export async function httpJson(url, body) {
+  const errs = [];
+  try {
+    const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+    if (r.ok) return await r.json();
+    errs.push(`web ${r.status}`);
+  } catch (e) { errs.push('web blocked'); }
   if (isNative) {
-    const r = await CapacitorHttp.request({ url, method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, ...(body ? { data: body } : {}), connectTimeout: 30000, readTimeout: 60000 });
-    if (r.status < 200 || r.status >= 300) throw new Error(`HTTP ${r.status}`);
-    return typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+    try {
+      const r = await CapacitorHttp.request({ url, method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, ...(body ? { data: body } : {}), connectTimeout: 30000, readTimeout: 60000 });
+      if (r.status >= 200 && r.status < 300) return typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+      errs.push(`app ${r.status}`);
+    } catch (e) { errs.push('app ' + (e.message || 'failed')); }
   }
-  const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  const msg = errs.join(', ');
+  throw new Error(/409/.test(msg) ? 'Statistics Canada updates its tables between midnight and 8:30 am — try again later' : msg);
 }

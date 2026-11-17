@@ -90,7 +90,7 @@ async function init() {
   N.onBack(() => { if (!$('#sheet').classList.contains('hidden')) { closeSheet(); return true; } if (tab !== 'trans') { tab = 'trans'; render(); return true; } return false; });
   if (L.clientId) Sync.loadGis().catch(() => {});
   notifyUpcoming();
-  if (N.isNative) setTimeout(() => refreshStatCanQuietly(), 8000);   // government food prices for the Price book, weekly
+  setTimeout(() => refreshStatCanQuietly(), 8000);   // government food prices for the Price book, weekly
   // New day while app stays open → post due items.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && M.materialize(S)) commit();
@@ -409,7 +409,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.17-a';
+const APP_VERSION = '2026.11.17-b';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -1826,8 +1826,8 @@ function priceBook(tab = L.pbTab || 'items', opts = {}) {
   PB.useStatCan(S); L.pbTab = tab; saveLocal();
   const its = PB.items(S), sc = PB.statcan(), lm = PB.latestMonth(), t0 = today();
   const scLine = sc ? `🇨🇦 Statistics Canada data up to <b>${lm ? monthName(lm) : '—'}</b> · checked ${new Date(sc.fetchedAt).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}`
-    : N.isNative ? '🇨🇦 Government data not downloaded yet' : '🇨🇦 Government data comes from the Android app — open the Price book there once and it syncs here';
-  let h = `<div class="hint" style="display:flex;gap:8px;align-items:center;margin-top:0"><span style="flex:1">${scLine}</span>${N.isNative || sc ? `<button class="secondary" id="scr" style="padding:4px 10px;margin:0">${scBusy ? '…' : 'Refresh'}</button>` : ''}</div>
+    : '🇨🇦 Government data not downloaded yet';
+  let h = `<div class="hint" style="display:flex;gap:8px;align-items:center;margin-top:0"><span style="flex:1">${scLine}</span><button class="secondary" id="scr" style="padding:4px 10px;margin:0">${scBusy ? '…' : 'Refresh'}</button></div>
     <div class="seg" id="pbt"><button data-t="items" class="${tab === 'items' ? 'on' : ''}">🏷️ Items</button><button data-t="infl" class="${tab === 'infl' ? 'on' : ''}">📈 vs inflation</button></div>`;
   const old = PB.untidied(S);
   const tidyBtn = old.length && A.enabled() ? `<div class="banner">🧾 ${old.length} older receipt${old.length > 1 ? 's have' : ' has'} an item list but no price-book details. <button class="secondary" id="tidy" style="padding:4px 10px;margin-top:6px">Add them with AI</button><br><small class="sub2">Sizes are usually missing on older ones, so most become “each”. About $0.001 per receipt.</small></div>` : '';
@@ -1881,7 +1881,6 @@ function priceBook(tab = L.pbTab || 'items', opts = {}) {
   body.querySelector('#pbg')?.addEventListener('click', e => { const b = e.target.closest('[data-g]'); if (b) priceBook('items', { ...opts, g: b.dataset.g }); });
   body.querySelectorAll('[data-pi]').forEach(el => (el.onclick = () => { const [k, u] = el.dataset.pi.split('|'); priceItem(k, u, () => priceBook(tab, opts)); }));
   body.querySelector('#scr')?.addEventListener('click', async e => {
-    if (!N.isNative) return toast('Statistics Canada only answers the Android app — refresh there and it syncs here', 4000);
     e.target.textContent = '…'; const r = await refreshStatCanQuietly(true);
     toast(r === 'ok' || r === 'same' ? 'Statistics Canada data is up to date' : `Couldn’t reach Statistics Canada: ${r}`, 4000); priceBook(tab, opts);
   });
@@ -1900,7 +1899,7 @@ function priceBook(tab = L.pbTab || 'items', opts = {}) {
     } catch (err) { toast('AI: ' + err.message, 4000); }
     await commit(); refreshStatCanQuietly(); priceBook(tab, opts);
   });
-  if (N.isNative && (!sc || Date.now() - sc.fetchedAt > 6 * 864e5)) refreshStatCanQuietly().then(r => { if (r === 'ok' && $('#sheet h2')?.textContent.startsWith('Price book')) priceBook(tab, opts); });
+  if (!sc || Date.now() - sc.fetchedAt > 6 * 864e5) refreshStatCanQuietly().then(r => { if (r === 'ok' && $('#sheet h2')?.textContent.startsWith('Price book')) priceBook(tab, opts); });
 }
 function priceItem(key, unit, back) {
   PB.useStatCan(S);
