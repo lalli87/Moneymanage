@@ -195,8 +195,14 @@ function monthRange() {
 }
 const monthNav = () => `<div class="monthnav"><button data-act="prevMonth" aria-label="Previous month">‹</button><b>${cursor.getFullYear()} ${MONTHS[cursor.getMonth()]}</b><button data-act="nextMonth" aria-label="Next month">›</button></div>`;
 const sortedGroups = () => M.live(S, 'groups').sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+// A payment can only come out of a real, visible bank/card/cash account — not a mortgage's own account or a deleted one.
+const payableAccount = id => { const a = id && M.get(S, 'accounts', id); return !!a && !a.mortgageAccount; };
 function accountOptions(sel, { allowEmpty = false } = {}) {
   let h = allowEmpty ? '<option value="">—</option>' : '';
+  if (sel && !payableAccount(sel)) {   // show the problem instead of silently showing the first account
+    const a = M.get(S, 'accounts', sel);
+    h += `<option value="${esc(sel)}" selected>⚠ ${a ? esc(a.name) + ' (not a bank account)' : 'Deleted account'} — choose one</option>`;
+  }
   for (const g of sortedGroups()) {
     const accs = M.live(S, 'accounts').filter(a => a.groupId === g.id && (!a.hidden || a.id === sel) && !a.mortgageAccount);
     if (!accs.length) continue;
@@ -401,7 +407,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.16-a';
+const APP_VERSION = '2026.11.16-b';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -822,6 +828,17 @@ function editTxn(t, preset = {}, { returnTo } = {}) {
     rec.hst = t.type !== 'transfer' && +f.hst.value > 0 ? M.round2(+f.hst.value) : undefined;
     if (t.type === 'transfer' && (!rec.toAccountId || rec.toAccountId === rec.accountId)) return toast('Choose a different “to” account');
     if (t.type === 'mortgage' && !rec.mortgageId) return toast('Add a mortgage first (More › Mortgages)');
+    if (t.type === 'mortgage' && !payableAccount(rec.accountId)) return toast('Choose the bank account this payment comes out of', 3500);
+    // Already recorded? (e.g. the repeat payment added it from another account) — move that one instead of doubling it.
+    if (isNew && t.type === 'mortgage') {
+      const near = M.live(S, 'transactions').find(x => x.type === 'mortgage' && x.mortgageId === rec.mortgageId && Math.abs(+x.amount - rec.amount) < 0.01
+        && Math.abs(M.parseYmd(x.date) - M.parseYmd(rec.date)) <= 5 * 864e5);
+      if (near && confirm(`A ${fmt(near.amount)} payment on ${near.date} is already recorded${near.accountId !== rec.accountId ? `, taken from ${payableAccount(near.accountId) ? M.accName(S, near.accountId) : 'no bank account'}` : ''}.\n\nOK = use that payment${near.accountId !== rec.accountId ? ` and take it from ${M.accName(S, rec.accountId)}` : ''} (no second payment)\nCancel = add another payment`)) {
+        Object.assign(near, { accountId: rec.accountId }); M.put(S, 'transactions', near); savedTxnId = near.id;
+        toast(`Payment on ${near.date} now comes out of ${M.accName(S, rec.accountId)}`, 3500);
+        closeSheet(); commit(); return;
+      }
+    }
     // money back for purchases
     rec.reimburses = undefined; rec.offsetCategoryId = undefined;
     let fullBack = false;
@@ -1053,6 +1070,15 @@ function mortgageDetail(m) {
       <button class="secondary" id="rate">Rate change</button><button class="secondary" id="edit">Edit</button>
       <button class="secondary" id="link">Link past payments</button><button class="secondary" id="doc">Import lender PDF</button>
     </div>
+    ${(() => {   // where the money comes from: payments with no real bank account don't reduce any balance
+      const bad = M.live(S, 'transactions').filter(x => x.type === 'mortgage' && x.mortgageId === m.id && x.date <= t0 && !payableAccount(x.accountId));
+      const recBad = rec && !payableAccount(rec.template.accountId);
+      const usual = Object.entries(M.live(S, 'transactions').filter(x => x.type === 'mortgage' && x.mortgageId === m.id && payableAccount(x.accountId))
+        .reduce((o, x) => (o[x.accountId] = (o[x.accountId] || 0) + 1, o), {})).sort((a, b) => b[1] - a[1])[0]?.[0] || defaultAccount();
+      return (bad.length || recBad ? `<div class="banner">⚠ ${bad.length ? `${bad.length} payment${bad.length > 1 ? 's are' : ' is'} not taken from any bank account${bad.length <= 3 ? ` (${bad.map(x => x.date).join(', ')})` : ''}, so no balance went down.` : ''}${recBad ? ' The repeat payment has no bank account either.' : ''}
+        <label style="margin:6px 0">Take ${bad.length > 1 || (bad.length && recBad) ? 'them' : 'it'} from<select id="fixAcc">${accountOptions(usual)}</select></label><button class="primary" id="fixPay" style="width:100%">Fix</button></div>` : '') +
+        (rec ? `<div class="hint pad" style="padding-top:0">🔁 Repeat payment: ${fmt(rec.template.amount)} ${M.FREQS[rec.freq] || ''} from <b>${payableAccount(rec.template.accountId) ? esc(M.accName(S, rec.template.accountId)) : '⚠ no bank account'}</b> · <a href="#" id="chgPayer">change</a></div>` : '');
+    })()}
     ${!rec ? `<div class="banner">No repeat payment is set up for this mortgage yet${firstDate ? ` (next due ${firstDate})` : ''}. <button class="secondary" id="mkrec" style="padding:4px 10px">Create it</button></div>` : ''}
     <div class="section-title">What if I pay extra each payment?</div>
     <div class="pad" style="padding-top:0"><div class="two"><input type="text" inputmode="decimal" data-money autocomplete="off" id="extra" placeholder="Extra $ per payment"><div id="whatif" class="hint" style="margin:10px 0 0"></div></div></div>
@@ -1060,10 +1086,11 @@ function mortgageDetail(m) {
     <div class="tablewrap"><table><tr><th>Year</th><th>Paid</th><th>Interest</th><th>Principal</th><th>Year-end balance</th></tr>
       ${Object.entries(m.annual).sort().reverse().map(([y, a]) => `<tr><td>${y}</td><td>${fmt(a.paid)}</td><td>${fmt(a.interest)}</td><td>${fmt(a.principal)}</td><td>${fmt(a.closing)}</td></tr>`).join('')}</table></div>` : ''}
     <div class="section-title">Payment history (${pays.length})</div>
-    <div class="tablewrap"><table><tr><th>Date</th><th>Paid</th><th>Interest</th><th>Principal</th><th>Balance</th></tr>
-      ${[...Lg.rows].reverse().slice(0, 80).map(r => r.checkpoint
-        ? `<tr><td>${r.date} 📄</td><td colspan="3" style="text-align:left">${esc(r.note)}${Math.abs(r.adjust) >= 0.01 ? ` (true-up ${r.adjust > 0 ? '+' : ''}${fmt(r.adjust)})` : ' ✓ matches'}</td><td>${fmt(r.balance)}</td></tr>`
-        : `<tr><td>${r.date}${r.prepayment ? ' ⚡' : ''}</td><td>${fmt(r.payment)}</td><td>${fmt(r.interest)}</td><td>${fmt(r.principal)}</td><td>${fmt(r.balance)}</td></tr>`).join('') || '<tr><td colspan="5">No payments recorded after the start date yet — use “Link past payments”.</td></tr>'}</table></div>
+    <div class="hint pad" style="padding-top:0">Tap a payment to edit it, e.g. to change the account it came out of.</div>
+    <div class="tablewrap"><table><tr><th>Date</th><th>Paid</th><th>From</th><th>Interest</th><th>Principal</th><th>Balance</th></tr>
+      ${[...Lg.rows].reverse().slice(0, 80).map(r => { if (r.checkpoint) return `<tr><td>${r.date} 📄</td><td colspan="4" style="text-align:left">${esc(r.note)}${Math.abs(r.adjust) >= 0.01 ? ` (true-up ${r.adjust > 0 ? '+' : ''}${fmt(r.adjust)})` : ' ✓ matches'}</td><td>${fmt(r.balance)}</td></tr>`;
+        const tx = M.get(S, 'transactions', r.txnId), ok = tx && payableAccount(tx.accountId);
+        return `<tr data-ptx="${r.txnId}" style="cursor:pointer"><td>${r.date}${r.prepayment ? ' ⚡' : ''}</td><td>${fmt(r.payment)}</td><td style="text-align:left;white-space:nowrap">${ok ? esc(M.accName(S, tx.accountId)) : '<span class="exp">⚠ none</span>'}</td><td>${fmt(r.interest)}</td><td>${fmt(r.principal)}</td><td>${fmt(r.balance)}</td></tr>`; }).join('') || '<tr><td colspan="6">No payments recorded after the start date yet — use “Link past payments”.</td></tr>'}</table></div>
     <div class="section-title">Upcoming schedule${pr.rows[0]?.lender ? ' (from your lender)' : ''}</div>
     <div class="hint pad" style="padding-top:0">Future payments are shown as scheduled only — they never reduce today's balances or count in monthly totals until the payment date.</div>
     <div class="tablewrap"><table><tr><th>Date</th><th>Interest</th><th>Principal</th><th>Balance</th></tr>
@@ -1075,6 +1102,29 @@ function mortgageDetail(m) {
   body.querySelector('#pay').onclick = () => editTxn(null, pay, { returnTo: backM });
   body.querySelector('#pre').onclick = () => editTxn(null, { ...pay, amount: '', prepayment: true, note: 'Mortgage prepayment' }, { returnTo: backM });
   body.querySelector('#edit').onclick = () => editMortgage(m);
+  body.querySelectorAll('[data-ptx]').forEach(el => (el.onclick = () => { const x = M.get(S, 'transactions', el.dataset.ptx); if (x) editTxn(x, {}, { returnTo: backM }); }));
+  body.querySelector('#fixPay')?.addEventListener('click', () => {
+    const to = body.querySelector('#fixAcc').value; if (!payableAccount(to)) return toast('Choose a bank account');
+    let n = 0;
+    for (const x of M.live(S, 'transactions')) if (x.type === 'mortgage' && x.mortgageId === m.id && !payableAccount(x.accountId)) { x.accountId = to; M.put(S, 'transactions', x); n++; }
+    if (rec && !payableAccount(rec.template.accountId)) { rec.template = { ...rec.template, accountId: to }; M.put(S, 'recurring', rec); }
+    commit(); toast(`${n ? `${n} payment${n > 1 ? 's' : ''}` : 'Repeat payment'} now come${n === 1 ? 's' : ''} out of ${M.accName(S, to)}`, 3500); mortgageDetail(m);
+  });
+  body.querySelector('#chgPayer')?.addEventListener('click', e => {
+    e.preventDefault();
+    const b2 = openSheet('Mortgage paid from', `<label>Bank account the payments come out of<select id="np">${accountOptions(payableAccount(rec.template.accountId) ? rec.template.accountId : defaultAccount())}</select></label>
+      <label class="check"><input type="checkbox" id="npPast"> Also move payments from <input type="date" id="npFrom" value="${M.addDays(t0, -30)}" style="width:auto;display:inline-block;margin:0 4px"> onward</label>
+      <button class="primary" id="npGo" style="width:100%">Save</button>`);
+    sheetReturn = backM;
+    b2.querySelector('#npGo').onclick = () => {
+      const to = b2.querySelector('#np').value; if (!payableAccount(to)) return toast('Choose a bank account');
+      rec.template = { ...rec.template, accountId: to }; M.put(S, 'recurring', rec);
+      let n = 0;
+      if (b2.querySelector('#npPast').checked) { const from = b2.querySelector('#npFrom').value;
+        for (const x of M.live(S, 'transactions')) if (x.type === 'mortgage' && x.mortgageId === m.id && x.date >= from && x.date <= t0 && x.accountId !== to) { x.accountId = to; M.put(S, 'transactions', x); n++; } }
+      commit(); toast(`Repeat payment now from ${M.accName(S, to)}${n ? ` · ${n} past payment${n > 1 ? 's' : ''} moved` : ''}`, 3500); closeSheet();
+    };
+  });
   body.querySelector('#link').onclick = () => linkMortgagePayments(m);
   body.querySelector('#mkrec')?.addEventListener('click', () => {
     const payers = {}; M.live(S, 'transactions').filter(t => t.type === 'mortgage' && t.mortgageId === m.id).forEach(t => (payers[t.accountId] = (payers[t.accountId] || 0) + 1));
