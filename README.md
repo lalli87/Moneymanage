@@ -24,6 +24,8 @@ Personal money tracker that installs on **Android and Windows** from one codebas
   - Learns store → account + category from every expense you save, so it gets more accurate over time.
 - Sync between devices (per-record merge with deletes tracked), JSON backup and restore, CSV export, works offline.
 
+- **Look and feel.** Three themes — Aurora Glass (dark), Daylight Frost (light) and Graphite (true black for OLED) — or Auto to follow the phone; five accent colours (indigo by default); a *Reduce transparency* switch. Glass top bar, floating dock, summary card, category icon tiles, sheets you can pull down to close, swipe a transaction left to delete (with Undo) or right to duplicate, and light vibration feedback in the Android app (Settings).
+
 ## One-time setup (about 20 minutes)
 
 ### 1. Host it on GitHub Pages (free, HTTPS)

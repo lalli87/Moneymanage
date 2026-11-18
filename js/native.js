@@ -10,6 +10,7 @@ const Files = registerPlugin('Filesystem');
 const Share = registerPlugin('Share');
 const App = registerPlugin('App');
 const SystemTheme = registerPlugin('SystemTheme');
+const Haptics = registerPlugin('Haptics');
 
 // ---------- Google sign-in (Android's own account picker; Google blocks its web sign-in inside apps) ----------
 let inited = null;
@@ -113,4 +114,10 @@ export async function httpJson(url, body) {
   }
   const msg = errs.join(', ');
   throw new Error(/409/.test(msg) ? 'Statistics Canada updates its tables between midnight and 8:30 am — try again later' : msg);
+}
+
+// A light tap of vibration (Android app: the Haptics plugin; elsewhere the browser's vibrate, where allowed).
+export function haptic(kind = 'light') {
+  if (isNative) { (kind === 'success' ? Haptics.notification({ type: 'SUCCESS' }) : Haptics.impact({ style: kind === 'medium' ? 'MEDIUM' : 'LIGHT' })).catch(() => {}); return; }
+  try { navigator.vibrate?.(kind === 'medium' ? 18 : 8); } catch {}
 }

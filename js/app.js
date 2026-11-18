@@ -30,7 +30,11 @@ const cap = s => s[0].toUpperCase() + s.slice(1);
 function loadLocal() { try { return JSON.parse(localStorage.getItem('mb_local')) || {}; } catch { return {}; } }
 function saveLocal() { try { localStorage.setItem('mb_local', JSON.stringify(L)); } catch {} }
 setTimeout(() => A.init(L, saveLocal));
-function toast(msg, ms = 2600) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), ms); }
+const buzz = (k = 'light') => { if (!L.noHaptics) N.haptic(k); };
+function toast(msg, ms = 2600, action) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show'); t.classList.toggle('act', !!action); t.onclick = action ? () => { t.classList.remove('show', 'act'); t.onclick = null; action(); } : null;
+  clearTimeout(toast.t); toast.t = setTimeout(() => { t.classList.remove('show', 'act'); t.onclick = null; }, ms);
+}
 
 let saveTimer;
 function commit() {
@@ -58,11 +62,19 @@ function systemDark() {
   return matchMedia('(prefers-color-scheme: dark)').matches || n === '1';
 }
 N.watchNight(v => { nativeNight = v; applyTheme(); });
+// Look (per device): skin 'auto' | 'aurora' | 'daylight' | 'graphite', accent colour, and "reduce transparency".
+// Auto = Aurora Glass when the phone is in dark mode, Daylight Frost when it's light. (Old 'light'/'dark' settings carry over.)
+const SKINS = { aurora: ['Aurora Glass', 'dark', '#0b0d1f'], daylight: ['Daylight Frost', 'light', '#eef0fb'], graphite: ['Graphite', 'dark', '#000000'] };
+const ACCENTS = { indigo: ['Indigo', '#6d7cff'], violet: ['Violet', '#a78bfa'], teal: ['Teal', '#2dd4bf'], pink: ['Pink', '#f472b6'], gold: ['Gold', '#fbbf24'] };
+function skinNow() {
+  const k = L.skin || ({ light: 'daylight', dark: 'aurora' }[L.theme]) || 'auto';
+  return k === 'auto' ? (systemDark() ? 'aurora' : 'daylight') : (SKINS[k] ? k : 'aurora');
+}
 function applyTheme() {
-  const t = L.theme || 'system';
-  const dark = t === 'dark' || (t === 'system' && systemDark());
-  document.documentElement.dataset.theme = t === 'system' ? (dark ? 'dark' : 'light') : t;
-  document.querySelector('meta[name=theme-color]')?.setAttribute('content', dark ? '#1a1b2e' : '#ffffff');
+  const k = skinNow(), r = document.documentElement;
+  r.dataset.skin = k; r.dataset.theme = SKINS[k][1]; r.dataset.accent = L.accent || 'indigo';
+  if (L.flat) r.dataset.flat = '1'; else delete r.dataset.flat;
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', SKINS[k][2]);
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 
@@ -262,14 +274,24 @@ function txRow(t, splits = {}) {
     acc += fors.length ? ` · for ${fors.map(e => `${e.note || txLabel(e)} ${e.date.slice(5)}`).join(', ')}` : t.offsetCategoryId ? ` · lowers ${M.catLabel(S, t.offsetCategoryId)}` : '';
     amtHtml = `${fmt(t.amount)}<small class="sub2" style="display:block">${counted > 0.004 ? fmt(counted) + ' as income' : 'not income'}</small>`;
   }
+  // Icon tile from the category's emoji; the note (or the category) as the title; category · account underneath.
+  const lab = txLabel(t), m = lab.match(/^(\p{Extended_Pictographic}\uFE0F?|↔)\s*(.*)$/u);
+  const icon = m ? (m[1] === '↔' ? '🔁' : m[1]) : t.type === 'income' ? '💰' : '🏷️', catTxt = m ? m[2] : lab;
   return `<div class="tx ${t.projected ? 'proj' : ''}" ${target} data-txid="${t.id}">
-    <div class="tx-cat">${esc(txLabel(t))}</div>
-    <div class="tx-main"><div>${esc(t.note || '')} ${t.remind ? '<span class="badge">Reminder</span>' : t.projected ? '<span class="badge">Scheduled</span>' : ''}</div>
-    <small>${esc(acc)}${freq ? ' (' + freq + ')' : ''}</small>${extra ? `<p class="tx-badges">${extra}</p>` : ''}</div>
+    <div class="tx-ic ${cls}" aria-hidden="true">${icon}</div>
+    <div class="tx-main"><div>${esc(t.note || catTxt)} ${t.remind ? '<span class="badge">Reminder</span>' : t.projected ? '<span class="badge">Scheduled</span>' : ''}</div>
+    <small>${t.note ? esc(catTxt) + ' · ' : ''}${esc(acc)}${freq ? ' (' + freq + ')' : ''}</small>${extra ? `<p class="tx-badges">${extra}</p>` : ''}</div>
     <div class="amt ${cls}" style="text-align:right">${amtHtml}</div></div>`;
 }
 
 // ---------- views ----------
+// The summary card at the top of Transactions: net in large type, income and expenses, and a split bar.
+function heroSummary(inc, exp, label = 'Net this month') {
+  const net = M.round2(inc - exp), tot = inc + exp || 1;
+  return `<div class="hero"><small>${label}</small><div class="net ${net < 0 ? 'exp' : ''}">${net >= 0 ? '+' : '−'}${fmt(Math.abs(net))}</div>
+    <div class="two"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div></div>
+    <div class="split" aria-hidden="true"><i style="width:${(inc / tot * 100).toFixed(1)}%;background:var(--inc)"></i><i style="width:${(exp / tot * 100).toFixed(1)}%;background:var(--exp);opacity:.9"></i></div></div>`;
+}
 const titles = { trans: 'Transactions', calendar: 'Calendar', stats: 'Stats', accounts: 'Accounts', more: 'More' };
 function render() {
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
@@ -297,7 +319,7 @@ function viewTrans() {
     const { inc, exp } = M.sumIE(posted, S);
     let h = seg + `<div class="monthnav"><button data-act="dayNav" data-n="-1" aria-label="Previous day">‹</button><b>${WD[dt.getDay()]} ${MONTHS[dt.getMonth()]} ${dt.getDate()}, ${dt.getFullYear()}</b><button data-act="dayNav" data-n="1" aria-label="Next day">›</button></div>`;
     if (d !== t0) h += `<div style="text-align:center;margin:-4px 0 6px"><button class="secondary" data-act="dayNav" data-n="0" style="padding:6px 14px">Today</button></div>`;
-    h += `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
+    h += heroSummary(inc, exp, 'Net this day');
     if (d === t0) h += attentionHtml();
     h += list.length ? dayGroup(d, list, splits) : '<div class="empty">Nothing on this day.<br>Tap + to add one.</div>';
     return h;
@@ -313,7 +335,7 @@ function viewTrans() {
   [...posted, ...proj].forEach(t => (byDay[t.date] = byDay[t.date] || []).push(t));
   const dates = Object.keys(byDay).sort().reverse();
   const later = dates.filter(d => d > t0), upto = dates.filter(d => d <= t0);
-  let h = seg + monthNav() + `<div class="summary"><div><small>Income</small><b class="inc">${fmt(inc)}</b></div><div><small>Expenses</small><b class="exp">${fmt(exp)}</b></div><div><small>Net</small><b>${fmt(inc - exp)}</b></div></div>`;
+  let h = seg + monthNav() + heroSummary(inc, exp);
   h += welcomeBanner() + catPackBanner() + attentionHtml() + owedBanner();
   if (soon.length) h += `<div class="banner">⏰ <b>${soon.length} upcoming</b> in the next ${days} days — ${fmt(soonTotal)}. Not deducted from balances until the due date.</div>`;
   if (!dates.length) h += '<div class="empty">No transactions this month.<br>Tap + to add one.</div>';
@@ -409,7 +431,7 @@ function viewAccounts() {
 // MoneyBook's Google app ID (identifies the app to Google — not a password or secret). Built in so any
 // device can just "Sign in with Google".
 const DEFAULT_CLIENT_ID = '722129310507-76tm17i5h6hshidt7siftlrggthrk4ed.apps.googleusercontent.com';
-const APP_VERSION = '2026.11.17-b';
+const APP_VERSION = '2026.11.18-a';
 function viewMore() {
   const item = (act, icon, t, sub = '') => `<div class="li" data-act="${act}"><span style="font-size:20px">${icon}</span><div class="grow">${t}${sub ? `<small>${sub}</small>` : ''}</div><span class="chev">›</span></div>`;
   const nm = M.live(S, 'mortgages').length, nr = M.live(S, 'recurring').length, nl = M.live(S, 'rules').length;
@@ -444,11 +466,67 @@ let sheetReturn = null;
 function openSheet(title, html) {
   sheetReturn = null;
   $('#sheet .sheet-body').innerHTML = `<h2>${esc(title)}<button data-act="closeSheet" aria-label="Close">✕</button></h2>${html}`;
-  $('#sheet').classList.remove('hidden');
+  const sh = $('#sheet');
+  if (sh.classList.contains('hidden')) { sh.classList.add('enter'); setTimeout(() => sh.classList.remove('enter'), 400); }
+  sh.classList.remove('hidden'); sh.querySelector('.sheet-body').style.transform = '';
   $('#sheet .sheet-body').scrollTop = 0;
   return $('#sheet .sheet-body');
 }
 const closeSheet = () => { const r = sheetReturn; sheetReturn = null; if (r) return r(); $('#sheet').classList.add('hidden'); };
+// Swipe a transaction row: left = delete (with Undo), right = duplicate (opens a copy dated today).
+(() => {
+  let row = null, x0 = 0, y0 = 0, dx = 0, mode = null, bg = null, justSwiped = 0;
+  const reset = () => { if (bg) bg.remove(); if (row) { row.classList.remove('swiping'); row.style.transform = ''; } row = bg = mode = null; dx = 0; };
+  document.addEventListener('touchstart', e => {
+    const r = e.target.closest('#view .tx[data-txid]'); if (!r || r.classList.contains('proj')) return;
+    if (!M.get(S, 'transactions', r.dataset.txid)) return;
+    row = r; x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; mode = null;
+  }, { passive: true });
+  document.addEventListener('touchmove', e => {
+    if (!row) return;
+    const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+    if (!mode) { if (Math.abs(mx) < 12 && Math.abs(my) < 12) return; mode = Math.abs(mx) > Math.abs(my) * 1.4 ? 'h' : 'v'; if (mode === 'v') return reset();
+      row.classList.add('swiping'); bg = document.createElement('div'); row.parentNode.insertBefore(bg, row);
+      Object.assign(bg.style, { top: row.offsetTop + 'px', height: row.offsetHeight + 'px' }); row.parentNode.style.position = 'relative'; }
+    if (mode !== 'h') return;
+    dx = mx; row.style.transform = `translateX(${dx}px)`;
+    const del = dx < 0, ready = Math.abs(dx) > 90;
+    bg.className = 'swipe-bg ' + (del ? 'del' : 'dup'); bg.textContent = del ? (ready ? '🗑 Release to delete' : '🗑 Delete') : (ready ? '⧉ Release to duplicate' : '⧉ Duplicate');
+    if (ready && !row._ready) { row._ready = true; buzz(); } else if (!ready) row._ready = false;
+  }, { passive: true });
+  document.addEventListener('touchend', () => {
+    if (!row || mode !== 'h') return reset();
+    const r = row, d = dx, t = M.get(S, 'transactions', r.dataset.txid); justSwiped = Date.now();
+    r.style.transition = 'transform .2s ease-out';
+    if (Math.abs(d) <= 90 || !t) { r.style.transform = ''; setTimeout(() => { r.style.transition = ''; reset(); }, 210); return; }
+    if (d < 0) {
+      r.style.transform = 'translateX(-110%)';
+      setTimeout(() => { reset(); M.remove(S, 'transactions', t.id); commit(); buzz('medium');
+        toast(`Deleted ${t.note || 'transaction'} · tap to undo`, 5000, () => { const x = S.transactions.find(y => y.id === t.id); if (x) { x.deleted = false; M.put(S, 'transactions', x); commit(); toast('Restored'); } }); }, 180);
+    } else {
+      r.style.transform = ''; setTimeout(() => { r.style.transition = ''; reset(); }, 210);
+      const { id, date, updatedAt, deleted, recurringId, reimburses, owed, ...copy } = t;
+      buzz(); editTxn(null, { ...copy, amount: (+t.amount).toFixed(2) });
+    }
+  });
+  document.addEventListener('click', e => { if (Date.now() - justSwiped < 400 && e.target.closest('#view .tx')) { e.stopPropagation(); e.preventDefault(); } }, true);
+})();
+// Pull a sheet down by its top edge to close it.
+(() => {
+  const body = () => $('#sheet .sheet-body'); let y0 = null, dy = 0;
+  document.addEventListener('touchstart', e => {
+    const b = body(); if (!b || $('#sheet').classList.contains('hidden') || !b.contains(e.target)) return;
+    const top = b.getBoundingClientRect().top;
+    if (b.scrollTop <= 0 && e.touches[0].clientY - top < 56 && !e.target.closest('input,select,textarea,button')) { y0 = e.touches[0].clientY; dy = 0; }
+  }, { passive: true });
+  document.addEventListener('touchmove', e => { if (y0 == null) return; dy = Math.max(0, e.touches[0].clientY - y0); body().style.transform = `translateY(${dy}px)`; }, { passive: true });
+  document.addEventListener('touchend', () => {
+    if (y0 == null) return; y0 = null; const b = body();
+    b.style.transition = 'transform .22s ease-out';
+    if (dy > 110) { b.style.transform = 'translateY(100%)'; setTimeout(() => { b.style.transition = ''; b.style.transform = ''; sheetReturn = null; $('#sheet').classList.add('hidden'); }, 200); }
+    else { b.style.transform = ''; setTimeout(() => (b.style.transition = ''), 230); }
+  });
+})();
 const fv = (f, n) => f.elements[n]?.value?.trim() ?? '';
 
 // ---------- transaction editor ----------
@@ -804,7 +882,7 @@ function editTxn(t, preset = {}, { returnTo } = {}) {
     } catch (err) { msg('Could not read receipt: ' + err.message); }
   };
 
-  if (!isNew) body.querySelector('#del').onclick = () => { if (confirm(M.reimbursedOf(S, t.id) ? 'Delete this purchase? The money paid back for it will count as income again.' : 'Delete this transaction?')) { M.remove(S, 'transactions', t.id); closeSheet(); commit(); toast('Deleted'); } };
+  if (!isNew) body.querySelector('#del').onclick = () => { if (confirm(M.reimbursedOf(S, t.id) ? 'Delete this purchase? The money paid back for it will count as income again.' : 'Delete this transaction?')) { M.remove(S, 'transactions', t.id); closeSheet(); commit(); buzz('medium'); toast('Deleted'); } };
   f.onsubmit = e => {
     e.preventDefault();
     const amount = parseFloat(f.amount.value);
@@ -881,7 +959,7 @@ function editTxn(t, preset = {}, { returnTo } = {}) {
       M.materialize(S);
       toast('Repeat payment created');
     } else { M.put(S, 'transactions', rec); savedTxnId = rec.id; if (rec.items || !isNew) { PB.syncFromTxn(S, rec); refreshStatCanQuietly(); } toast(rec.date > today() ? 'Scheduled ⏰' : rec.reimburses ? 'Saved — linked to the purchase ↩️' : 'Saved'); }
-    closeSheet(); commit();
+    closeSheet(); commit(); buzz('success');
   };
   sheetReturn = returnTo || null;
 }
@@ -1372,7 +1450,14 @@ function download(name, text, type) {
 function settings() {
   const perm = 'Notification' in window ? Notification.permission : 'unsupported';
   const body = openSheet('Settings & reminders', `<form id="f">
-    <label>Appearance<select name="theme">${[['system', 'Match phone / PC setting'], ['light', 'Always light (day mode)'], ['dark', 'Always dark']].map(([k, v]) => `<option value="${k}" ${(L.theme || 'system') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+    <div class="hint" style="margin-top:0;color:var(--ink);font-weight:600">Theme</div>
+    <div class="skins" id="skins">${[['auto', 'Auto (match phone)', 'linear-gradient(90deg,#1c1f4a 50%,#eef0fb 50%)'], ['aurora', 'Aurora Glass', 'linear-gradient(135deg,#3b2fbf,#0b0d1f 60%,#0e6fa0)'],
+      ['daylight', 'Daylight Frost', 'linear-gradient(135deg,#c7d2fe,#f5f6ff 55%,#bae6fd)'], ['graphite', 'Graphite (black)', 'linear-gradient(135deg,#000,#2a2a30)']]
+      .map(([k, l, g]) => `<button type="button" data-skin="${k}" class="${(L.skin || ({ light: 'daylight', dark: 'aurora' }[L.theme]) || 'auto') === k ? 'on' : ''}"><i style="background:${g}"></i>${l}</button>`).join('')}</div>
+    <div class="hint" style="color:var(--ink);font-weight:600">Accent colour</div>
+    <div class="swatches" id="sw">${Object.entries(ACCENTS).map(([k, [l, c]]) => `<button type="button" data-acc="${k}" class="${(L.accent || 'indigo') === k ? 'on' : ''}" style="background:${c}" aria-label="${l}" title="${l}"></button>`).join('')}</div>
+    <label class="check"><input type="checkbox" name="flat" ${L.flat ? 'checked' : ''}> Reduce transparency (solid, no glass — smoothest)</label>
+    <label class="check"><input type="checkbox" name="haptic" ${L.noHaptics ? '' : 'checked'}> Vibrate lightly on save, delete and swipe</label>
     <label>HST rate % (for the HST button on transactions)<input type="number" min="0" max="20" step="0.5" name="hst" value="${S.settings.hstRate ?? 13}"></label>
     <label>Remind me this many days before a payment<input type="number" min="0" max="28" name="rd" value="${S.settings.remindDays ?? 3}"></label>
     <div class="hint">Used for the upcoming banner, this device's notification when you open the app, and new Google Calendar reminders.</div>
@@ -1382,8 +1467,13 @@ function settings() {
     <div class="pad hint">Status: <b>${perm}</b>. Browsers can only notify when the app is opened; for reliable alerts while it's closed, use the 🔔 Google Calendar reminder on repeat payments.</div>
     <div class="btnrow"><button class="secondary" id="np">Allow notifications</button></div>`);
   const f = body.querySelector('#f');
-  f.theme.onchange = () => { L.theme = f.theme.value; saveLocal(); applyTheme(); };
-  f.onsubmit = e => { e.preventDefault(); L.theme = f.theme.value; saveLocal(); applyTheme(); S.settings = { ...S.settings, remindDays: Math.max(0, +f.rd.value || 0), hstRate: +f.hst.value || 13, refundMonths: +f.rfm.value || 6, updatedAt: Date.now() }; commit(); closeSheet(); toast('Saved'); };
+  body.querySelector('#skins').onclick = e => { const b = e.target.closest('[data-skin]'); if (!b) return; L.skin = b.dataset.skin; saveLocal(); applyTheme();
+    body.querySelectorAll('#skins button').forEach(x => x.classList.toggle('on', x === b)); buzz(); };
+  body.querySelector('#sw').onclick = e => { const b = e.target.closest('[data-acc]'); if (!b) return; L.accent = b.dataset.acc; saveLocal(); applyTheme();
+    body.querySelectorAll('#sw button').forEach(x => x.classList.toggle('on', x === b)); buzz(); };
+  f.flat.onchange = () => { L.flat = f.flat.checked; saveLocal(); applyTheme(); };
+  f.haptic.onchange = () => { L.noHaptics = !f.haptic.checked; saveLocal(); buzz(); };
+  f.onsubmit = e => { e.preventDefault(); saveLocal(); applyTheme(); S.settings = { ...S.settings, remindDays: Math.max(0, +f.rd.value || 0), hstRate: +f.hst.value || 13, refundMonths: +f.rfm.value || 6, updatedAt: Date.now() }; commit(); closeSheet(); toast('Saved'); };
   body.querySelector('#np').onclick = async () => {
     if (!('Notification' in window)) return toast('Not supported in this browser');
     const p = await Notification.requestPermission(); toast('Notifications: ' + p); if (p === 'granted') { L.lastNotified = ''; notifyUpcoming(); }

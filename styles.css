@@ -190,3 +190,176 @@ details.later[open] > summary { color: inherit; }
 .badge.owe { background: var(--accent); }
 .badge.back { background: var(--inc); }
 .tx-badges { margin: 3px 0 0; display: flex; flex-wrap: wrap; gap: 4px; } .tx-badges .badge { white-space: nowrap; }
+
+/* =====================================================================================================
+   2026 look: three skins (Aurora Glass, Daylight Frost, Graphite), a choice of accent, glass surfaces.
+   <html data-skin="aurora|daylight|graphite" data-theme="dark|light" data-accent="indigo|…" data-flat="1">
+   Blur (backdrop-filter) is used only on the big layers — top bar, dock, summary and sheets — never per row.
+   ===================================================================================================== */
+:root { --acc-l: #5b5bd6; --acc-d: #8b96ff; --acc2-l: #0ea5e9; --acc2-d: #38bdf8; }
+:root[data-accent="violet"] { --acc-l: #7c3aed; --acc-d: #b197fc; --acc2-l: #c026d3; --acc2-d: #e879f9; }
+:root[data-accent="teal"] { --acc-l: #0d9488; --acc-d: #2dd4bf; --acc2-l: #0891b2; --acc2-d: #67e8f9; }
+:root[data-accent="pink"] { --acc-l: #db2777; --acc-d: #f472b6; --acc2-l: #9333ea; --acc2-d: #c084fc; }
+:root[data-accent="gold"] { --acc-l: #b45309; --acc-d: #fbbf24; --acc2-l: #ca8a04; --acc2-d: #fde047; }
+:root[data-skin] { --accent: var(--acc-l); --accent2: var(--acc2-l); --radius: 18px; --blur: blur(22px) saturate(160%); }
+:root[data-skin][data-theme="dark"] { --accent: var(--acc-d); --accent2: var(--acc2-d); }
+
+:root[data-skin="aurora"] {
+  --bg: #0b0d1f; --ink: #f2f3ff; --mute: #a3a6c9; --line: rgba(255,255,255,.08); --card: rgba(255,255,255,.065); --field: rgba(255,255,255,.07);
+  --glass: rgba(24,26,56,.55); --edge: rgba(255,255,255,.13); --dock: rgba(18,20,46,.62); --sheet: rgba(20,22,48,.82); --rowsolid: #1a1c3a;
+  --shadow: 0 12px 32px rgba(0,0,0,.38); --inc: #6ab8ff; --exp: #ff9466; --sched: #f3c35b; --xfer: #a3a6c9;
+  --art: radial-gradient(60vmax 50vmax at -10% -5%, color-mix(in srgb, var(--accent) 38%, transparent), transparent 60%),
+         radial-gradient(55vmax 45vmax at 110% 40%, color-mix(in srgb, var(--accent2) 26%, transparent), transparent 60%),
+         radial-gradient(50vmax 40vmax at 0% 105%, rgba(124,58,237,.28), transparent 60%);
+}
+:root[data-skin="daylight"] {
+  --bg: #eef0fb; --ink: #1a1c33; --mute: #6c6f8f; --line: rgba(30,30,90,.08); --card: rgba(255,255,255,.66); --field: rgba(255,255,255,.8);
+  --glass: rgba(255,255,255,.6); --edge: rgba(255,255,255,.95); --dock: rgba(255,255,255,.72); --sheet: rgba(246,247,255,.9); --rowsolid: #fbfbff;
+  --shadow: 0 12px 32px rgba(40,40,110,.13); --inc: #1d64d8; --exp: #d9480f; --sched: #a16207; --xfer: #6c6f8f;
+  --art: radial-gradient(60vmax 50vmax at -10% -5%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+         radial-gradient(55vmax 45vmax at 110% 45%, color-mix(in srgb, var(--accent2) 20%, transparent), transparent 60%),
+         radial-gradient(50vmax 40vmax at 0% 105%, rgba(196,181,253,.35), transparent 60%);
+}
+:root[data-skin="graphite"] {
+  --bg: #000; --ink: #f5f5f7; --mute: #8e8e99; --line: rgba(255,255,255,.07); --card: #121215; --field: #1c1c21;
+  --glass: rgba(22,22,26,.86); --edge: rgba(255,255,255,.09); --dock: rgba(20,20,24,.86); --sheet: rgba(14,14,17,.94); --rowsolid: #121215;
+  --shadow: 0 12px 32px rgba(0,0,0,.7); --inc: #4da3ff; --exp: #ff7a45; --sched: #e0b84a; --xfer: #8e8e99; --art: none;
+}
+/* Reduce transparency: solid surfaces, no blur */
+:root[data-flat="1"] { --blur: none; --art: none; }
+:root[data-flat="1"][data-skin="aurora"] { --card: #171936; --glass: #15173a; --dock: #15173a; --sheet: #121433; }
+:root[data-flat="1"][data-skin="daylight"] { --card: #fff; --glass: #fff; --dock: #fff; --sheet: #f6f7ff; }
+
+:root[data-skin] body { background: var(--bg); font-variant-numeric: tabular-nums; -webkit-tap-highlight-color: transparent; }
+:root[data-skin] body::before { content: ''; position: fixed; inset: 0; z-index: -1; background: var(--art); pointer-events: none; }
+
+/* top bar */
+:root[data-skin] #top { background: color-mix(in srgb, var(--bg) 55%, transparent); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border-bottom: 1px solid var(--line); padding: 12px 16px 10px; padding-top: max(12px, env(safe-area-inset-top)); }
+:root[data-flat="1"] #top { background: var(--bg); }
+:root[data-skin] #top h1 { font-size: 23px; font-weight: 750; letter-spacing: -.4px; }
+:root[data-skin] .iconbtn { width: 40px; height: 40px; border-radius: 50%; padding: 0; font-size: 19px; background: var(--card); border: 1px solid var(--edge); }
+
+/* floating glass dock + action button */
+:root[data-skin] #view { padding-bottom: calc(118px + var(--safe-b)); }
+:root[data-skin] #tabs { left: 12px; right: 12px; bottom: calc(10px + var(--safe-b)); padding: 6px 4px; border-radius: 26px; border: 1px solid var(--edge);
+  background: var(--dock); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); box-shadow: var(--shadow); max-width: 640px; margin: 0 auto; }
+:root[data-skin] #tabs button { padding: 4px 0 2px; gap: 3px; font-size: 10.5px; transition: color .2s; }
+:root[data-skin] #tabs button i { width: 46px; height: 30px; display: grid; place-items: center; border-radius: 15px; border: 1px solid transparent;
+  transition: transform .25s cubic-bezier(.3,1.4,.5,1), background .25s, box-shadow .25s; }
+:root[data-skin] #tabs button.on { color: var(--ink); font-weight: 700; }
+:root[data-skin] #tabs button.on i { transform: scale(1.12); background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 55%, transparent), color-mix(in srgb, var(--accent2) 35%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 60%, white 10%); box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent); }
+:root[data-skin="daylight"] #tabs button.on i { background: #fff; box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 30%, transparent); }
+:root[data-skin] #fab { right: 20px; bottom: calc(92px + var(--safe-b)); width: 58px; height: 58px; border-radius: 20px; font-size: 30px;
+  background: linear-gradient(135deg, var(--accent), var(--accent2)); box-shadow: 0 10px 26px color-mix(in srgb, var(--accent) 55%, transparent);
+  transition: transform .2s cubic-bezier(.3,1.4,.5,1); }
+:root[data-skin] #fab:active { transform: scale(.92); }
+
+/* segmented control: lit glass tile that pops */
+:root[data-skin] .seg { margin: 12px; padding: 4px; border-radius: 18px; background: var(--card); border: 1px solid var(--edge); }
+:root[data-skin] .seg button { color: var(--mute); font-weight: 500; border-radius: 14px; padding: 9px 6px; border: 1px solid transparent;
+  transition: transform .25s cubic-bezier(.3,1.4,.5,1), background .25s, color .2s, box-shadow .25s; }
+:root[data-skin] .seg button.on { color: var(--ink); font-weight: 700; transform: scale(1.05);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 50%, transparent), color-mix(in srgb, var(--accent2) 30%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 55%, white 15%); box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent); }
+:root[data-skin="daylight"] .seg button.on { background: #fff; border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+:root[data-skin="graphite"] .seg button.on { background: linear-gradient(180deg, #3a3a42, #2a2a30); border-color: rgba(255,255,255,.2); box-shadow: 0 4px 14px rgba(0,0,0,.6); }
+
+/* month navigation and the summary card */
+:root[data-skin] .monthnav { background: none; padding: 8px 12px 4px; font-size: 16px; }
+:root[data-skin] .monthnav button { width: 36px; height: 36px; border-radius: 50%; padding: 0; background: var(--card); border: 1px solid var(--edge); font-size: 20px; color: var(--ink); }
+:root[data-skin] .summary { margin: 8px 12px 4px; padding: 12px 4px; border-radius: 22px; background: var(--glass); border: 1px solid var(--edge);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); box-shadow: var(--shadow); }
+:root[data-skin] .summary b { font-size: 16px; font-weight: 700; }
+.hero { margin: 8px 12px 4px; padding: 16px; border-radius: 24px; background: var(--glass, var(--card)); border: 1px solid var(--edge, var(--line));
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); box-shadow: var(--shadow, none); }
+.hero small { color: var(--mute); font-size: 12px; display: block; }
+.hero .net { font-size: 30px; font-weight: 800; letter-spacing: -.6px; margin: 2px 0 12px; }
+.hero .two { gap: 10px; }
+.hero .two > div { padding: 10px 12px; border-radius: 16px; background: var(--card); border: 1px solid var(--edge, var(--line)); }
+.hero .two b { font-size: 16px; font-weight: 700; }
+.hero .split { display: flex; height: 6px; border-radius: 6px; overflow: hidden; margin-top: 12px; background: var(--line); }
+.hero .split i { display: block; height: 100%; transition: width .4s; }
+
+/* cards and lists */
+:root[data-skin] .day, :root[data-skin] #view .list, :root[data-skin] .menu, :root[data-skin] details.later > summary {
+  margin: 10px 12px 0; border-radius: 20px; overflow: hidden; background: var(--card); border: 1px solid var(--edge); }
+:root[data-skin] .sheet-body .list { border-radius: 18px; overflow: hidden; border: 1px solid var(--edge); background: var(--card); margin-bottom: 10px; }
+:root[data-skin] .menu { margin-top: 12px; }
+:root[data-skin] .dayhead { border-bottom: 1px solid var(--line); padding: 10px 14px 8px; }
+:root[data-skin] .dayhead .d { font-size: 22px; font-weight: 750; }
+:root[data-skin] .dayhead .wd { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); border-radius: 7px; padding: 2px 6px; font-weight: 600; }
+:root[data-skin] .tx, :root[data-skin] .li { border-bottom: 1px solid var(--line); }
+:root[data-skin] .tx { padding: 10px 14px; gap: 12px; position: relative; transition: transform .2s, background .2s; }
+:root[data-skin] .tx:active, :root[data-skin] .li[data-act]:active, :root[data-skin] .li[data-pi]:active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+:root[data-skin] .tx .amt { font-weight: 700; }
+:root[data-skin] .tx-main > div { font-weight: 600; }
+.tx-ic { width: 40px; height: 40px; flex: none; border-radius: 14px; display: grid; place-items: center; font-size: 19px; background: color-mix(in srgb, var(--exp) 16%, transparent); }
+.tx-ic.inc { background: color-mix(in srgb, var(--inc) 18%, transparent); }
+.tx-ic.xfer { background: color-mix(in srgb, var(--xfer) 20%, transparent); }
+:root[data-skin] .li > span[style*="font-size:20px"] { width: 38px; height: 38px; flex: none; border-radius: 13px; display: grid; place-items: center; font-size: 19px !important;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); }
+:root[data-skin] .grouphead { padding: 18px 18px 6px; font-weight: 600; letter-spacing: .2px; }
+:root[data-skin] .section-title { padding: 18px 16px 6px; font-weight: 600; font-size: 12.5px; letter-spacing: .3px; text-transform: uppercase; }
+:root[data-skin] .cards { padding: 12px; gap: 10px; }
+:root[data-skin] .card { border-radius: 18px; background: var(--card); border: 1px solid var(--edge); padding: 14px; }
+:root[data-skin] .card > b { font-size: 18px; font-weight: 750; }
+:root[data-skin] table { background: transparent; }
+:root[data-skin] .tablewrap { border-radius: 16px; background: var(--card); border: 1px solid var(--edge); }
+:root[data-skin] .banner { border-radius: 18px; background: color-mix(in srgb, var(--sched) 13%, var(--card)); }
+:root[data-skin] .empty { padding: 48px 24px; }
+:root[data-skin] .pill { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+:root[data-skin] .badge { border-radius: 9px; padding: 2px 7px; }
+
+/* calendar */
+:root[data-skin] .cal { background: none; gap: 4px; padding: 8px 10px; border: 0; }
+:root[data-skin] .cal .h { background: none; font-weight: 600; }
+:root[data-skin] .cal .c { background: var(--card); border-radius: 12px; border: 1px solid var(--line); min-height: 70px; }
+:root[data-skin] .cal .c.today { outline: none; border: 1.5px solid var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+
+/* sheets: glass, drag handle, slide up */
+:root[data-skin] .sheet-backdrop { background: rgba(4,5,15,.45); }
+:root[data-skin] .sheet-body { background: var(--sheet); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--edge); border-bottom: 0; border-radius: 28px 28px 0 0; padding-top: 22px; box-shadow: 0 -10px 40px rgba(0,0,0,.3); }
+:root[data-skin] .sheet-body::before { content: ''; position: absolute; top: 8px; left: 50%; width: 42px; height: 5px; margin-left: -21px; border-radius: 3px; background: var(--mute); opacity: .45; }
+@media (min-width: 700px) { :root[data-skin] .sheet-body { border-radius: 28px; border-bottom: 1px solid var(--edge); } }
+:root[data-skin] .sheet-body h2 { font-size: 20px; font-weight: 750; letter-spacing: -.3px; }
+:root[data-skin] .sheet-body h2 button { width: 34px; height: 34px; border-radius: 50%; background: var(--card); border: 1px solid var(--edge); font-size: 15px; padding: 0; }
+#sheet.enter .sheet-body { animation: sheetUp .32s cubic-bezier(.2,.9,.3,1.05); }
+#sheet.enter .sheet-backdrop { animation: fadeIn .25s ease-out; }
+@keyframes sheetUp { from { transform: translateY(40%); opacity: .3; } to { transform: none; opacity: 1; } }
+@keyframes fadeIn { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { #sheet.enter .sheet-body, #sheet.enter .sheet-backdrop { animation: none; } }
+
+/* forms and buttons */
+:root[data-skin] input, :root[data-skin] select, :root[data-skin] textarea, :root[data-skin] .catpick { background: var(--field); border: 1px solid var(--edge); border-radius: 14px; padding: 11px 12px; }
+:root[data-skin] input:focus, :root[data-skin] select:focus, :root[data-skin] textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+:root[data-skin] input[type=checkbox] { accent-color: var(--accent); width: 20px; height: 20px; padding: 0; }
+:root[data-skin] .primary, :root[data-skin] .secondary, :root[data-skin] .danger { border-radius: 16px; padding: 13px; transition: transform .15s; }
+:root[data-skin] .primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 35%, transparent); }
+:root[data-skin] .secondary { background: var(--card); border: 1px solid var(--edge); }
+:root[data-skin] .secondary.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 20%, var(--card)); font-weight: 700; }
+:root[data-skin] .primary:active, :root[data-skin] .secondary:active, :root[data-skin] .danger:active { transform: scale(.97); }
+:root[data-skin] #toast { background: color-mix(in srgb, #15162b 88%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,.12); border-radius: 18px; bottom: calc(160px + var(--safe-b)); box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+#toast.act { pointer-events: auto; }
+:root[data-skin] #picker, :root[data-skin] #lock { background: var(--bg); }
+:root[data-skin] .pk-head { background: var(--glass); backdrop-filter: var(--blur); border-bottom: 1px solid var(--line); }
+:root[data-skin] .pk-row { background: transparent; }
+:root[data-skin] .pk-row.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* swipe a transaction: left = delete, right = duplicate */
+.swipe-bg { position: absolute; left: 0; right: 0; display: flex; align-items: center; padding: 0 22px; font-weight: 700; font-size: 14px; color: #fff; z-index: 0; pointer-events: none; }
+.swipe-bg.del { justify-content: flex-end; background: var(--exp); }
+.swipe-bg.dup { justify-content: flex-start; background: var(--inc); }
+.tx.swiping { z-index: 1; background: var(--rowsolid, var(--card)); transition: none; }
+
+/* appearance picker in Settings */
+.skins { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 4px 0 12px; }
+.skins button { text-align: left; padding: 10px; border-radius: 16px; border: 1.5px solid var(--edge, var(--line)); background: var(--card); color: var(--ink); font-size: 13px; }
+.skins button i { display: block; height: 34px; border-radius: 10px; margin-bottom: 6px; font-style: normal; }
+.skins button.on { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); font-weight: 700; }
+.swatches { display: flex; gap: 12px; margin: 6px 0 12px; }
+.swatches button { width: 38px; height: 38px; border-radius: 50%; border: 2px solid var(--edge, var(--line)); padding: 0; }
+.swatches button.on { outline: 3px solid var(--ink); outline-offset: 2px; transform: scale(1.08); }
